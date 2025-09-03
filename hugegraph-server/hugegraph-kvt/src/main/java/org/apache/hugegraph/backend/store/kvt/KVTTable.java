@@ -102,7 +102,7 @@ public class KVTTable extends BackendTable<KVTSession, KVTBackendEntry> {
         assert entry instanceof KVTBackendEntry;
         KVTBackendEntry kvtEntry = (KVTBackendEntry) entry;
         
-        byte[] key = kvtEntry.id().asBytes();
+        byte[] key = KVTIdUtil.idToBytes(this.type, kvtEntry.id());
         byte[] value = kvtEntry.columnsBytes();
         
         session.set(this.tableId, key, value);
@@ -119,7 +119,7 @@ public class KVTTable extends BackendTable<KVTSession, KVTBackendEntry> {
         assert entry instanceof KVTBackendEntry;
         KVTBackendEntry kvtEntry = (KVTBackendEntry) entry;
         
-        byte[] key = kvtEntry.id().asBytes();
+        byte[] key = KVTIdUtil.idToBytes(this.type, kvtEntry.id());
         session.delete(this.tableId, key);
         
         LOG.trace("Deleted entry with key {} from table {}", 
@@ -145,7 +145,7 @@ public class KVTTable extends BackendTable<KVTSession, KVTBackendEntry> {
         KVTBackendEntry kvtEntry = (KVTBackendEntry) entry;
         
         // Get existing entry
-        byte[] key = kvtEntry.id().asBytes();
+        byte[] key = KVTIdUtil.idToBytes(this.type, kvtEntry.id());
         byte[] existingValue = session.get(this.tableId, key);
         
         if (existingValue == null) {
@@ -166,7 +166,7 @@ public class KVTTable extends BackendTable<KVTSession, KVTBackendEntry> {
         assert entry instanceof KVTBackendEntry;
         KVTBackendEntry kvtEntry = (KVTBackendEntry) entry;
         
-        byte[] key = kvtEntry.id().asBytes();
+        byte[] key = KVTIdUtil.idToBytes(this.type, kvtEntry.id());
         byte[] existingValue = session.get(this.tableId, key);
         
         if (existingValue != null) {
@@ -186,7 +186,7 @@ public class KVTTable extends BackendTable<KVTSession, KVTBackendEntry> {
         assert entry instanceof KVTBackendEntry;
         KVTBackendEntry kvtEntry = (KVTBackendEntry) entry;
         
-        byte[] key = kvtEntry.id().asBytes();
+        byte[] key = KVTIdUtil.idToBytes(this.type, kvtEntry.id());
         byte[] existingValue = session.get(this.tableId, key);
         
         if (existingValue == null) {
@@ -217,7 +217,7 @@ public class KVTTable extends BackendTable<KVTSession, KVTBackendEntry> {
         List<BackendEntry> entries = new ArrayList<>();
         
         for (Id id : query.ids()) {
-            byte[] key = id.asBytes();
+            byte[] key = KVTIdUtil.idToBytes(this.type, id);
             byte[] value = session.get(this.tableId, key);
             
             if (value != null) {
@@ -244,26 +244,25 @@ public class KVTTable extends BackendTable<KVTSession, KVTBackendEntry> {
     
     private Iterator<BackendEntry> queryByRange(KVTSession session, 
                                                ConditionQuery query) {
-        // Extract range conditions
-        byte[] startKey = new byte[0];  // Default to beginning
-        byte[] endKey = new byte[0];    // Default to end
-        
-        for (Condition condition : query.conditions()) {
-            // TODO: Extract range conditions and convert to byte keys
-        }
+        // Extract range conditions using query translator
+        KVTQueryTranslator.ScanRange range = 
+            KVTQueryTranslator.extractScanRange(this.type, query);
         
         int limit = query.limit() == Query.NO_LIMIT ? 
                    Integer.MAX_VALUE : (int) query.limit();
         
         Iterator<KVTNative.KVTPair> pairs = 
-            session.scan(this.tableId, startKey, endKey, limit);
+            session.scan(this.tableId, range.startKey, range.endKey, limit);
         
-        return new MapperIterator<>(pairs, pair -> {
-            Id id = IdGenerator.of(pair.key);
+        Iterator<BackendEntry> entries = new MapperIterator<>(pairs, pair -> {
+            Id id = KVTIdUtil.bytesToId(pair.key);
             KVTBackendEntry entry = new KVTBackendEntry(this.type, id);
             entry.columnsBytes(pair.value);
             return entry;
         });
+        
+        // Apply filter conditions if any
+        return KVTQueryTranslator.applyFilters(entries, range.filterConditions);
     }
     
     private Iterator<BackendEntry> scanTable(KVTSession session, Query query) {
@@ -274,11 +273,14 @@ public class KVTTable extends BackendTable<KVTSession, KVTBackendEntry> {
         int limit = query.limit() == Query.NO_LIMIT ? 
                    Integer.MAX_VALUE : (int) query.limit();
         
+        byte[] startKey = KVTIdUtil.scanStartKey(this.type, null);
+        byte[] endKey = KVTIdUtil.scanEndKey(this.type, null);
+        
         Iterator<KVTNative.KVTPair> pairs = 
-            session.scan(this.tableId, new byte[0], new byte[0], limit);
+            session.scan(this.tableId, startKey, endKey, limit);
         
         return new MapperIterator<>(pairs, pair -> {
-            Id id = IdGenerator.of(pair.key);
+            Id id = KVTIdUtil.bytesToId(pair.key);
             KVTBackendEntry entry = new KVTBackendEntry(this.type, id);
             entry.columnsBytes(pair.value);
             return entry;
@@ -302,7 +304,7 @@ public class KVTTable extends BackendTable<KVTSession, KVTBackendEntry> {
         assert entry instanceof KVTBackendEntry;
         KVTBackendEntry kvtEntry = (KVTBackendEntry) entry;
         
-        byte[] key = kvtEntry.id().asBytes();
+        byte[] key = KVTIdUtil.idToBytes(this.type, kvtEntry.id());
         byte[] value = session.get(this.tableId, key);
         
         return value != null;
