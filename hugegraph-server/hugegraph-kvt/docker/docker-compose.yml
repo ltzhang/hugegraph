@@ -1,0 +1,160 @@
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.
+# The ASF licenses this file to You under the Apache License, Version 2.0
+# (the "License"); you may not use this file except in compliance with
+# the License.  You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+version: '3.8'
+
+services:
+  hugegraph-kvt:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: hugegraph/hugegraph-kvt:latest
+    container_name: hugegraph-kvt
+    hostname: hugegraph-kvt
+    restart: unless-stopped
+    
+    ports:
+      - "8080:8080"  # REST API
+      - "8182:8182"  # Gremlin Server
+      
+    environment:
+      # JVM settings
+      - HEAP_SIZE=4g
+      - DIRECT_MEMORY=2g
+      
+      # KVT settings
+      - KVT_DATA_PATH=/data/kvt
+      - KVT_WAL_PATH=/data/kvt/wal
+      - KVT_CACHE_SIZE=1073741824  # 1GB
+      - KVT_BATCH_SIZE=5000
+      - KVT_THREADS_READ=32
+      - KVT_THREADS_WRITE=16
+      
+      # Debug settings
+      - KVT_DEBUG=false
+      - KVT_LOG_LEVEL=INFO
+      
+    volumes:
+      - kvt-data:/data
+      - kvt-logs:/opt/hugegraph-kvt/logs
+      - kvt-backup:/opt/hugegraph-kvt/backup
+      - ./conf:/opt/hugegraph-kvt/conf:ro
+      
+    networks:
+      - hugegraph-net
+      
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+      
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+        reservations:
+          cpus: '2'
+          memory: 4G
+
+  hugegraph-console:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: hugegraph/hugegraph-kvt:latest
+    container_name: hugegraph-console
+    hostname: hugegraph-console
+    
+    command: console
+    
+    environment:
+      - HEAP_SIZE=1g
+      - GREMLIN_REMOTE_HOSTS=hugegraph-kvt
+      
+    volumes:
+      - ./scripts:/scripts:ro
+      
+    networks:
+      - hugegraph-net
+      
+    depends_on:
+      - hugegraph-kvt
+      
+    stdin_open: true
+    tty: true
+
+  # Optional: Monitoring with Prometheus
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    
+    ports:
+      - "9090:9090"
+      
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+      
+    networks:
+      - hugegraph-net
+      
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+
+  # Optional: Visualization with Grafana
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    
+    ports:
+      - "3000:3000"
+      
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+      
+    volumes:
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+      - grafana-data:/var/lib/grafana
+      
+    networks:
+      - hugegraph-net
+      
+    depends_on:
+      - prometheus
+
+volumes:
+  kvt-data:
+    driver: local
+  kvt-logs:
+    driver: local
+  kvt-backup:
+    driver: local
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local
+
+networks:
+  hugegraph-net:
+    driver: bridge
