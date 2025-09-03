@@ -76,6 +76,19 @@ public class KVTNative {
     }
 
     /**
+     * Key-value pair
+     */
+    public static class KVTPair {
+        public final byte[] key;
+        public final byte[] value;
+        
+        public KVTPair(byte[] key, byte[] value) {
+            this.key = key;
+            this.value = value;
+        }
+    }
+
+    /**
      * Operation type for batch operations
      */
     public enum OpType {
