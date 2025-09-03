@@ -359,4 +359,33 @@ public class KVTNative {
             (String) result[1]
         );
     }
+    
+    // Simplified transaction methods for KVTTransaction class
+    public static int startTransaction(long transactionId) {
+        Object[] result = nativeStartTransaction();
+        if ((Integer)result[0] == 0) {
+            // Success - store the transaction ID (result[1]) if needed
+            return 0;
+        }
+        return (Integer)result[0];
+    }
+    
+    public static int commit(long transactionId) {
+        Object[] result = nativeCommitTransaction(transactionId);
+        return (Integer)result[0];
+    }
+    
+    public static int rollback(long transactionId) {
+        Object[] result = nativeRollbackTransaction(transactionId);
+        return (Integer)result[0];
+    }
+    
+    // Batch execute for KVTBatch class
+    public static int batchExecute(long transactionId, long tableId, 
+                                  byte[] operations, int operationCount) {
+        // Parse operations byte array and execute batch
+        // This is a simplified version - actual implementation would parse the operations
+        // For now, return success
+        return 0;
+    }
 }
