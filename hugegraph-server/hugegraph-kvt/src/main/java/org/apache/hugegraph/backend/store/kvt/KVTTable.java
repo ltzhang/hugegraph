@@ -51,15 +51,23 @@ public class KVTTable extends BackendTable<KVTSession, KVTBackendEntry> {
     private final HugeType type;
     private final boolean rangePartitioned;
     private long tableId;
+    private final KVTQueryCache cache;
+    private final boolean cacheEnabled;
     
     public KVTTable(HugeType type) {
         this(type, false);
     }
     
     public KVTTable(HugeType type, boolean rangePartitioned) {
+        this(type, rangePartitioned, true);
+    }
+    
+    public KVTTable(HugeType type, boolean rangePartitioned, boolean enableCache) {
         this.type = type;
         this.rangePartitioned = rangePartitioned;
         this.tableId = 0;
+        this.cacheEnabled = enableCache;
+        this.cache = enableCache ? new KVTQueryCache() : null;
     }
     
     @Override
@@ -106,6 +114,11 @@ public class KVTTable extends BackendTable<KVTSession, KVTBackendEntry> {
         byte[] value = kvtEntry.columnsBytes();
         
         session.set(this.tableId, key, value);
+        
+        // Invalidate cache for this table
+        if (this.cache != null) {
+            this.cache.invalidate(this.tableId);
+        }
         
         LOG.trace("Inserted entry with key {} to table {}", 
                  entry.id(), this.table());
@@ -203,14 +216,44 @@ public class KVTTable extends BackendTable<KVTSession, KVTBackendEntry> {
      */
     @Override
     public Iterator<BackendEntry> query(KVTSession session, Query query) {
+        // Check cache first
+        if (this.cache != null) {
+            Iterator<BackendEntry> cached = this.cache.get(query, this.tableId);
+            if (cached != null) {
+                return cached;
+            }
+        }
+        
+        // Optimize query
+        KVTQueryOptimizer.QueryPlan plan = 
+            KVTQueryOptimizer.optimize(query, this.type);
+        
+        // Execute query based on plan
+        Iterator<BackendEntry> result;
         if (query instanceof IdQuery) {
-            return this.queryById(session, (IdQuery) query);
+            result = this.queryById(session, (IdQuery) query);
         } else if (query instanceof ConditionQuery) {
-            return this.queryByCondition(session, (ConditionQuery) query);
+            result = this.queryByCondition(session, (ConditionQuery) query);
         } else {
             throw new BackendException("Unsupported query type: %s", 
                                      query.getClass());
         }
+        
+        // Apply optimization
+        result = KVTQueryOptimizer.createIterator(plan, result);
+        
+        // Cache result if appropriate
+        if (this.cache != null && shouldCache(query)) {
+            // Materialize results for caching
+            List<BackendEntry> materializedResults = new ArrayList<>();
+            while (result.hasNext()) {
+                materializedResults.add(result.next());
+            }
+            this.cache.put(query, this.tableId, materializedResults.iterator());
+            result = materializedResults.iterator();
+        }
+        
+        return result;
     }
     
     private Iterator<BackendEntry> queryById(KVTSession session, IdQuery query) {
@@ -332,5 +375,33 @@ public class KVTTable extends BackendTable<KVTSession, KVTBackendEntry> {
     public void deleteShard(KVTSession session, Shard shard) {
         // Sharding support - not yet implemented
         throw new UnsupportedOperationException("Sharding not yet supported");
+    }
+    
+    /**
+     * Check if query result should be cached
+     */
+    private boolean shouldCache(Query query) {
+        // Don't cache queries with large limits
+        if (query.limit() > 1000) {
+            return false;
+        }
+        
+        // Don't cache queries without conditions (full scans)
+        if (query instanceof ConditionQuery) {
+            ConditionQuery cq = (ConditionQuery) query;
+            if (cq.conditions().isEmpty()) {
+                return false;
+            }
+        }
+        
+        // Cache other queries
+        return true;
+    }
+    
+    /**
+     * Get cache statistics
+     */
+    public KVTQueryCache.CacheStatistics getCacheStatistics() {
+        return this.cache != null ? this.cache.getStatistics() : null;
     }
 }
