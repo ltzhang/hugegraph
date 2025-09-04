@@ -149,4 +149,10 @@ public class KVTFeatures implements BackendFeatures {
         // OLAP properties can be stored
         return true;
     }
+
+    @Override
+    public boolean supportsMergeVertexProperty() {
+        // Vertex property merging is supported
+        return true;
+    }
 }

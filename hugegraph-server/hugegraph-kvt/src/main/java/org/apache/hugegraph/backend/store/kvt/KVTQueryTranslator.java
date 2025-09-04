@@ -23,25 +23,142 @@ import java.util.List;
 
 import org.apache.hugegraph.backend.id.Id;
 import org.apache.hugegraph.backend.query.Condition;
+import org.apache.hugegraph.backend.query.Condition.Relation;
+import org.apache.hugegraph.backend.query.Condition.RelationType;
 import org.apache.hugegraph.backend.query.ConditionQuery;
 import org.apache.hugegraph.backend.query.Query;
 import org.apache.hugegraph.backend.store.BackendEntry;
 import org.apache.hugegraph.type.HugeType;
 import org.apache.hugegraph.type.define.HugeKeys;
-import org.apache.hugegraph.util.E;
-import org.apache.hugegraph.util.Log;
-import org.slf4j.Logger;
 
 /**
- * Translates HugeGraph queries to KVT scan operations.
- * Handles condition extraction and range query optimization.
+ * Translates HugeGraph queries into KVT scan operations.
  */
 public class KVTQueryTranslator {
-
-    private static final Logger LOG = Log.logger(KVTQueryTranslator.class);
     
     /**
-     * Range scan parameters
+     * Translate a Query into a scan range for KVT.
+     */
+    public static ScanRange translateToScan(Query query, HugeType type) {
+        if (query instanceof ConditionQuery) {
+            return translateConditionQuery((ConditionQuery) query, type);
+        }
+        
+        // Default to full scan
+        return new ScanRange(null, null, false, false, new ArrayList<>());
+    }
+    
+    /**
+     * Check if a query can be optimized into a range scan.
+     */
+    public static boolean canOptimizeToRange(Query query) {
+        if (!(query instanceof ConditionQuery)) {
+            return false;
+        }
+        
+        ConditionQuery cq = (ConditionQuery) query;
+        
+        // Check if we have ID range conditions
+        for (Condition condition : cq.conditions()) {
+            if (!(condition instanceof Relation)) {
+                continue;
+            }
+            
+            Relation relation = (Relation) condition;
+            if (relation.key() == HugeKeys.ID && 
+                relation.relation().isRangeType()) {
+                return true;
+            }
+        }
+        
+        return false;
+    }
+    
+    private static ScanRange translateConditionQuery(ConditionQuery query,
+                                                     HugeType type) {
+        Id startId = null;
+        Id endId = null;
+        boolean startInclusive = true;
+        boolean endInclusive = false;
+        
+        List<Condition> filterConditions = new ArrayList<>();
+        
+        // Process each condition
+        for (Condition condition : query.conditions()) {
+            if (!(condition instanceof Relation)) {
+                // Non-relation conditions need special handling
+                filterConditions.add(condition);
+                continue;
+            }
+            
+            Relation relation = (Relation) condition;
+            HugeKeys key = (HugeKeys) relation.key();
+            
+            // Handle ID range conditions
+            if (key == HugeKeys.ID) {
+                switch (relation.relation()) {
+                    case EQ:
+                        // Exact ID match - set both start and end to same value
+                        startId = (Id) relation.value();
+                        endId = startId;
+                        startInclusive = true;
+                        endInclusive = true;
+                        break;
+                        
+                    case GT:
+                        startId = (Id) relation.value();
+                        startInclusive = false;
+                        break;
+                        
+                    case GTE:
+                        startId = (Id) relation.value();
+                        startInclusive = true;
+                        break;
+                        
+                    case LT:
+                        endId = (Id) relation.value();
+                        endInclusive = false;
+                        break;
+                        
+                    case LTE:
+                        endId = (Id) relation.value();
+                        endInclusive = true;
+                        break;
+                        
+                    case IN:
+                        // IN conditions need special handling
+                        // For now, add to filter conditions
+                        filterConditions.add(relation);
+                        break;
+                        
+                    default:
+                        // Other conditions need post-filtering
+                        filterConditions.add(relation);
+                        break;
+                }
+            } else {
+                // Non-ID conditions need post-filtering
+                filterConditions.add(relation);
+            }
+        }
+        
+        // Convert IDs to byte arrays for scanning
+        byte[] startKey = null;
+        byte[] endKey = null;
+        
+        if (startId != null) {
+            startKey = KVTIdUtil.idToKey(startId, type);
+        }
+        if (endId != null) {
+            endKey = KVTIdUtil.idToKey(endId, type);
+        }
+        
+        return new ScanRange(startKey, endKey, startInclusive, endInclusive,
+                           filterConditions);
+    }
+    
+    /**
+     * Represents a scan range with optional filter conditions.
      */
     public static class ScanRange {
         public final byte[] startKey;
@@ -59,168 +176,33 @@ public class KVTQueryTranslator {
             this.endInclusive = endInclusive;
             this.filterConditions = filterConditions;
         }
-    }
-    
-    /**
-     * Extract scan range from a condition query
-     */
-    public static ScanRange extractScanRange(HugeType type, ConditionQuery query) {
-        E.checkNotNull(type, "type");
-        E.checkNotNull(query, "query");
         
-        // Initialize with full type range
-        Id startId = null;
-        Id endId = null;
-        boolean startInclusive = true;
-        boolean endInclusive = false;
-        
-        List<Condition> filterConditions = new ArrayList<>();
-        
-        // Process each condition
-        for (Condition condition : query.conditions()) {
-            HugeKeys key = (HugeKeys) condition.key();
-            
-            // Handle ID range conditions
-            if (key == HugeKeys.ID) {
-                switch (condition.relation()) {
-                    case EQ:
-                        // Exact ID match - set both start and end to same value
-                        startId = (Id) condition.value();
-                        endId = startId;
-                        startInclusive = true;
-                        endInclusive = true;
-                        break;
-                        
-                    case GT:
-                        startId = (Id) condition.value();
-                        startInclusive = false;
-                        break;
-                        
-                    case GTE:
-                        startId = (Id) condition.value();
-                        startInclusive = true;
-                        break;
-                        
-                    case LT:
-                        endId = (Id) condition.value();
-                        endInclusive = false;
-                        break;
-                        
-                    case LTE:
-                        endId = (Id) condition.value();
-                        endInclusive = true;
-                        break;
-                        
-                    case IN:
-                        // IN conditions need special handling
-                        // For now, add to filter conditions
-                        filterConditions.add(condition);
-                        break;
-                        
-                    default:
-                        // Other conditions need post-filtering
-                        filterConditions.add(condition);
-                        break;
-                }
-            } else if (key == HugeKeys.LABEL) {
-                // Label conditions can sometimes be used for range optimization
-                // For now, add to filter conditions
-                filterConditions.add(condition);
-            } else {
-                // All other conditions require post-filtering
-                filterConditions.add(condition);
-            }
-        }
-        
-        // Convert IDs to byte keys
-        byte[] startKey = KVTIdUtil.scanStartKey(type, startId);
-        byte[] endKey = KVTIdUtil.scanEndKey(type, endId);
-        
-        return new ScanRange(startKey, endKey, startInclusive, endInclusive, 
-                           filterConditions);
-    }
-    
-    /**
-     * Check if a query can use range scan optimization
-     */
-    public static boolean canUseRangeScan(HugeType type, Query query) {
-        if (!(query instanceof ConditionQuery)) {
-            return false;
-        }
-        
-        ConditionQuery cq = (ConditionQuery) query;
-        
-        // Check if table supports range partitioning
-        if (!isRangePartitioned(type)) {
-            return false;
-        }
-        
-        // Check if query has range conditions
-        return hasRangeCondition(cq);
-    }
-    
-    /**
-     * Check if a type uses range partitioning
-     */
-    private static boolean isRangePartitioned(HugeType type) {
-        switch (type) {
-            case EDGE_OUT:
-            case EDGE_IN:
-            case SECONDARY_INDEX:
-            case RANGE_INDEX:
-            case UNIQUE_INDEX:
-            case SHARD_INDEX:
-                return true;
-            default:
-                return false;
+        public boolean hasFilters() {
+            return !filterConditions.isEmpty();
         }
     }
     
     /**
-     * Check if query has range conditions
-     */
-    private static boolean hasRangeCondition(ConditionQuery query) {
-        for (Condition condition : query.conditions()) {
-            HugeKeys key = (HugeKeys) condition.key();
-            if (key == HugeKeys.ID) {
-                switch (condition.relation()) {
-                    case GT:
-                    case GTE:
-                    case LT:
-                    case LTE:
-                        return true;
-                    default:
-                        continue;
-                }
-            }
-        }
-        return false;
-    }
-    
-    /**
-     * Apply filter conditions to scan results
+     * Apply filter conditions to entries after scanning.
      */
     public static Iterator<BackendEntry> applyFilters(
             Iterator<BackendEntry> entries,
-            List<Condition> filterConditions) {
+            List<Condition> conditions) {
         
-        if (filterConditions.isEmpty()) {
+        if (conditions.isEmpty()) {
             return entries;
         }
         
-        return new FilterIterator(entries, filterConditions);
+        return new FilterIterator(entries, conditions);
     }
     
-    /**
-     * Iterator that filters entries based on conditions
-     */
     private static class FilterIterator implements Iterator<BackendEntry> {
         private final Iterator<BackendEntry> source;
         private final List<Condition> conditions;
         private BackendEntry next;
         
-        public FilterIterator(Iterator<BackendEntry> source, 
-                            List<Condition> conditions) {
+        public FilterIterator(Iterator<BackendEntry> source,
+                             List<Condition> conditions) {
             this.source = source;
             this.conditions = conditions;
             this.next = null;
@@ -240,33 +222,20 @@ public class KVTQueryTranslator {
         
         private boolean matchesConditions(BackendEntry entry) {
             // TODO: Implement condition matching logic
-            // This requires deserializing entry properties and checking conditions
-            // For now, return true (no filtering)
+            // For now, pass all entries
             return true;
         }
         
         @Override
         public boolean hasNext() {
-            return this.next != null;
+            return next != null;
         }
         
         @Override
         public BackendEntry next() {
-            BackendEntry result = this.next;
-            this.advance();
-            return result;
+            BackendEntry current = next;
+            advance();
+            return current;
         }
-    }
-    
-    /**
-     * Optimize a query for KVT execution
-     */
-    public static Query optimize(Query query) {
-        // TODO: Implement query optimization
-        // - Reorder conditions for better selectivity
-        // - Combine adjacent range conditions
-        // - Convert IN conditions to multiple range scans if beneficial
-        
-        return query;
     }
 }

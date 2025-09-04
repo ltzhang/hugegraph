@@ -32,7 +32,7 @@ import org.slf4j.Logger;
  * KVT session for managing transactions.
  * Each session corresponds to a transaction context in KVT.
  */
-public class KVTSession extends BackendSession {
+public class KVTSession extends BackendSession.AbstractBackendSession {
 
     private static final Logger LOG = Log.logger(KVTSession.class);
     
@@ -233,17 +233,34 @@ public class KVTSession extends BackendSession {
     }
     
     @Override
+    public void open() {
+        this.opened = true;
+    }
+    
+    @Override
     public void close() {
         if (this.transactionId != 0) {
             LOG.warn("Closing session with active transaction {}, rolling back",
                     this.transactionId);
             this.rollbackTx();
         }
+        this.opened = false;
     }
     
     @Override
-    public boolean closed() {
-        return false;  // Sessions are managed by pool
+    public Object commit() {
+        this.commitTx();
+        return null;
+    }
+    
+    @Override
+    public void rollback() {
+        this.rollbackTx();
+    }
+    
+    @Override
+    public boolean hasChanges() {
+        return this.transactionId != 0;
     }
     
     /**

@@ -259,24 +259,25 @@ public abstract class KVTStore extends AbstractBackendStore<KVTSession> {
         for (Iterator<BackendAction> it = mutation.mutation(); it.hasNext();) {
             BackendAction action = it.next();
             BackendEntry entry = action.entry();
-            KVTTable table = this.table(entry.type());
+            KVTTable table = (KVTTable) this.table(entry.type());
+            KVTBackendEntry kvtEntry = (KVTBackendEntry) entry;
             
             switch (action.action()) {
                 case INSERT:
                 case APPEND:
-                    table.insert(session, entry);
+                    table.insert(session, kvtEntry);
                     break;
                 case DELETE:
-                    table.delete(session, entry);
+                    table.delete(session, kvtEntry);
                     break;
                 case ELIMINATE:
-                    table.eliminate(session, entry);
+                    table.eliminate(session, kvtEntry);
                     break;
                 case UPDATE_IF_PRESENT:
-                    table.updateIfPresent(session, entry);
+                    table.updateIfPresent(session, kvtEntry);
                     break;
                 case UPDATE_IF_ABSENT:
-                    table.updateIfAbsent(session, entry);
+                    table.updateIfAbsent(session, kvtEntry);
                     break;
                 default:
                     throw new BackendException("Unsupported action: %s", 
@@ -289,7 +290,7 @@ public abstract class KVTStore extends AbstractBackendStore<KVTSession> {
     public Iterator<BackendEntry> query(Query query) {
         this.checkOpened();
         KVTSession session = this.sessions.session();
-        KVTTable table = this.table(query.resultType());
+        KVTTable table = (KVTTable) this.table(query.resultType());
         return table.query(session, query);
     }
     
@@ -297,7 +298,7 @@ public abstract class KVTStore extends AbstractBackendStore<KVTSession> {
     public Number queryNumber(Query query) {
         this.checkOpened();
         KVTSession session = this.sessions.session();
-        KVTTable table = this.table(query.resultType());
+        KVTTable table = (KVTTable) this.table(query.resultType());
         return table.queryNumber(session, query);
     }
     

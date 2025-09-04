@@ -54,7 +54,7 @@ public class KVTIdUtil {
         E.checkNotNull(type, "type");
         E.checkNotNull(id, "id");
         
-        byte prefix = typePrefix(type);
+        byte prefix = typePrefixByte(type);
         byte[] idBytes = id.asBytes();
         
         // Create result with prefix + id bytes
@@ -159,13 +159,13 @@ public class KVTIdUtil {
      * Create prefix bytes for scanning all entries of a type
      */
     public static byte[] typePrefix(HugeType type) {
-        return new byte[] { typePrefix(type) };
+        return new byte[] { typePrefixByte(type) };
     }
     
     /**
      * Get the type prefix byte for a HugeType
      */
-    private static byte typePrefix(HugeType type) {
+    private static byte typePrefixByte(HugeType type) {
         switch (type) {
             case VERTEX:
                 return PREFIX_VERTEX;

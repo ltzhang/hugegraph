@@ -63,6 +63,7 @@ public class KVTTable extends BackendTable<KVTSession, KVTBackendEntry> {
     }
     
     public KVTTable(HugeType type, boolean rangePartitioned, boolean enableCache) {
+        super(type.string());
         this.type = type;
         this.rangePartitioned = rangePartitioned;
         this.tableId = 0;
@@ -106,7 +107,8 @@ public class KVTTable extends BackendTable<KVTSession, KVTBackendEntry> {
     /**
      * Insert or update an entry
      */
-    public void insert(KVTSession session, BackendEntry entry) {
+    @Override
+    public void insert(KVTSession session, KVTBackendEntry entry) {
         assert entry instanceof KVTBackendEntry;
         KVTBackendEntry kvtEntry = (KVTBackendEntry) entry;
         
@@ -128,7 +130,7 @@ public class KVTTable extends BackendTable<KVTSession, KVTBackendEntry> {
      * Delete an entry
      */
     @Override
-    public void delete(KVTSession session, BackendEntry entry) {
+    public void delete(KVTSession session, KVTBackendEntry entry) {
         assert entry instanceof KVTBackendEntry;
         KVTBackendEntry kvtEntry = (KVTBackendEntry) entry;
         
@@ -143,7 +145,7 @@ public class KVTTable extends BackendTable<KVTSession, KVTBackendEntry> {
      * Append columns to an entry
      */
     @Override
-    public void append(KVTSession session, BackendEntry entry) {
+    public void append(KVTSession session, KVTBackendEntry entry) {
         // For KVT, append is similar to insert (overwrites the value)
         // In a real implementation, you might want to merge columns
         this.insert(session, entry);
@@ -153,7 +155,7 @@ public class KVTTable extends BackendTable<KVTSession, KVTBackendEntry> {
      * Eliminate specific columns from an entry
      */
     @Override
-    public void eliminate(KVTSession session, BackendEntry entry) {
+    public void eliminate(KVTSession session, KVTBackendEntry entry) {
         assert entry instanceof KVTBackendEntry;
         KVTBackendEntry kvtEntry = (KVTBackendEntry) entry;
         
@@ -171,45 +173,7 @@ public class KVTTable extends BackendTable<KVTSession, KVTBackendEntry> {
         LOG.warn("Column elimination not yet fully implemented");
     }
     
-    /**
-     * Update entry if present
-     */
-    @Override
-    public boolean updateIfPresent(KVTSession session, BackendEntry entry) {
-        assert entry instanceof KVTBackendEntry;
-        KVTBackendEntry kvtEntry = (KVTBackendEntry) entry;
-        
-        byte[] key = KVTIdUtil.idToBytes(this.type, kvtEntry.id());
-        byte[] existingValue = session.get(this.tableId, key);
-        
-        if (existingValue != null) {
-            byte[] value = kvtEntry.columnsBytes();
-            session.set(this.tableId, key, value);
-            return true;
-        }
-        
-        return false;
-    }
-    
-    /**
-     * Update entry if absent
-     */
-    @Override
-    public boolean updateIfAbsent(KVTSession session, BackendEntry entry) {
-        assert entry instanceof KVTBackendEntry;
-        KVTBackendEntry kvtEntry = (KVTBackendEntry) entry;
-        
-        byte[] key = KVTIdUtil.idToBytes(this.type, kvtEntry.id());
-        byte[] existingValue = session.get(this.tableId, key);
-        
-        if (existingValue == null) {
-            byte[] value = kvtEntry.columnsBytes();
-            session.set(this.tableId, key, value);
-            return true;
-        }
-        
-        return false;
-    }
+    // updateIfPresent and updateIfAbsent are inherited from BackendTable
     
     /**
      * Query entries from the table
@@ -289,7 +253,7 @@ public class KVTTable extends BackendTable<KVTSession, KVTBackendEntry> {
                                                ConditionQuery query) {
         // Extract range conditions using query translator
         KVTQueryTranslator.ScanRange range = 
-            KVTQueryTranslator.extractScanRange(this.type, query);
+            KVTQueryTranslator.translateToScan(query, this.type);
         
         int limit = query.limit() == Query.NO_LIMIT ? 
                    Integer.MAX_VALUE : (int) query.limit();
@@ -343,7 +307,7 @@ public class KVTTable extends BackendTable<KVTSession, KVTBackendEntry> {
     }
     
     @Override
-    public boolean queryExist(KVTSession session, BackendEntry entry) {
+    public boolean queryExist(KVTSession session, KVTBackendEntry entry) {
         assert entry instanceof KVTBackendEntry;
         KVTBackendEntry kvtEntry = (KVTBackendEntry) entry;
         
@@ -353,25 +317,21 @@ public class KVTTable extends BackendTable<KVTSession, KVTBackendEntry> {
         return value != null;
     }
     
-    @Override
     public Shard getShard(KVTSession session, int partitionId) {
         // Sharding support - not yet implemented
         throw new UnsupportedOperationException("Sharding not yet supported");
     }
     
-    @Override
     public void addShard(KVTSession session, Shard shard) {
         // Sharding support - not yet implemented
         throw new UnsupportedOperationException("Sharding not yet supported");
     }
     
-    @Override
     public void updateShard(KVTSession session, Shard shard) {
         // Sharding support - not yet implemented  
         throw new UnsupportedOperationException("Sharding not yet supported");
     }
     
-    @Override
     public void deleteShard(KVTSession session, Shard shard) {
         // Sharding support - not yet implemented
         throw new UnsupportedOperationException("Sharding not yet supported");

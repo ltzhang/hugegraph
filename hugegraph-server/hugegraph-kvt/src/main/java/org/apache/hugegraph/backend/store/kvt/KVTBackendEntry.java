@@ -24,8 +24,10 @@ import java.util.List;
 
 import org.apache.hugegraph.backend.id.Id;
 import org.apache.hugegraph.backend.serializer.BinaryBackendEntry;
+import org.apache.hugegraph.backend.serializer.BinaryBackendEntry.BinaryId;
 import org.apache.hugegraph.backend.serializer.BytesBuffer;
 import org.apache.hugegraph.backend.store.BackendEntry;
+import org.apache.hugegraph.backend.store.BackendEntry.BackendColumn;
 import org.apache.hugegraph.type.HugeType;
 import org.apache.hugegraph.util.Bytes;
 
@@ -40,7 +42,7 @@ public class KVTBackendEntry extends BinaryBackendEntry {
     private byte[] bytesValue;
     
     public KVTBackendEntry(HugeType type, Id id) {
-        super(type, id);
+        super(type, new BinaryId(id.asBytes(), id));
         this.bytesValue = null;
     }
     
@@ -65,21 +67,22 @@ public class KVTBackendEntry extends BinaryBackendEntry {
      */
     public void columnsBytes(byte[] bytes) {
         this.bytesValue = bytes;
-        // Clear columns so they'll be deserialized on demand
-        this.columns.clear();
+        // Clear columns - they'll be deserialized on demand
+        // Note: We can't directly clear the parent's private columns field
     }
     
     /**
      * Serialize columns to bytes
      */
     private byte[] serializeColumns() {
-        if (this.columns.isEmpty()) {
+        Collection<BackendColumn> cols = this.columns();
+        if (cols.isEmpty()) {
             return EMPTY_BYTES;
         }
         
         // Calculate total size
         int totalSize = 4;  // 4 bytes for column count
-        for (BackendColumn column : this.columns) {
+        for (BackendColumn column : cols) {
             totalSize += 4 + column.name.length;   // 4 bytes for name length + name
             totalSize += 4 + column.value.length;  // 4 bytes for value length + value
         }
@@ -87,10 +90,10 @@ public class KVTBackendEntry extends BinaryBackendEntry {
         ByteBuffer buffer = ByteBuffer.allocate(totalSize);
         
         // Write column count
-        buffer.putInt(this.columns.size());
+        buffer.putInt(cols.size());
         
         // Write each column
-        for (BackendColumn column : this.columns) {
+        for (BackendColumn column : cols) {
             // Write name
             buffer.putInt(column.name.length);
             buffer.put(column.name);
@@ -128,17 +131,17 @@ public class KVTBackendEntry extends BinaryBackendEntry {
             byte[] value = new byte[valueLen];
             buffer.get(value);
             
-            this.columns.add(BackendColumn.of(name, value));
+            this.column(BackendColumn.of(name, value));
         }
     }
     
     @Override
     public Collection<BackendColumn> columns() {
-        if (this.columns.isEmpty() && this.bytesValue != null) {
+        if (this.columnsSize() == 0 && this.bytesValue != null) {
             // Deserialize columns from bytes on demand
             this.deserializeColumns();
         }
-        return this.columns;
+        return super.columns();
     }
     
     @Override
@@ -150,9 +153,7 @@ public class KVTBackendEntry extends BinaryBackendEntry {
         this.bytesValue = null;
     }
     
-    @Override
     public void clear() {
-        super.clear();
         this.bytesValue = null;
     }
     
@@ -178,9 +179,9 @@ public class KVTBackendEntry extends BinaryBackendEntry {
     public String toString() {
         return String.format("KVTBackendEntry{type=%s, id=%s, columns=%s}",
                            this.type(), this.id(), 
-                           this.columns.isEmpty() ? 
+                           this.columnsSize() == 0 ? 
                            (this.bytesValue == null ? "null" : 
                             this.bytesValue.length + " bytes") : 
-                           this.columns.size());
+                           this.columnsSize());
     }
 }

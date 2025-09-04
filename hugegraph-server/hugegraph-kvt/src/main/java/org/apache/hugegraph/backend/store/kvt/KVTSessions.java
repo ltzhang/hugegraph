@@ -17,6 +17,7 @@
 
 package org.apache.hugegraph.backend.store.kvt;
 
+import org.apache.hugegraph.backend.store.BackendSession;
 import org.apache.hugegraph.backend.store.BackendSessionPool;
 import org.apache.hugegraph.config.HugeConfig;
 import org.apache.hugegraph.util.Log;
@@ -30,18 +31,13 @@ public class KVTSessions extends BackendSessionPool {
 
     private static final Logger LOG = Log.logger(KVTSessions.class);
     
-    private final HugeConfig config;
     private final String database;
-    private final String store;
-    
-    // Thread-local session storage
-    private final ThreadLocal<KVTSession> threadLocalSession;
+    private boolean opened;
     
     public KVTSessions(HugeConfig config, String database, String store) {
-        this.config = config;
+        super(config, store);
         this.database = database;
-        this.store = store;
-        this.threadLocalSession = new ThreadLocal<>();
+        this.opened = false;
         
         LOG.debug("Created KVTSessions for database '{}', store '{}'", 
                  database, store);
@@ -55,34 +51,30 @@ public class KVTSessions extends BackendSessionPool {
         return this.store;
     }
     
-    /**
-     * Get or create a session for the current thread
-     */
-    public KVTSession session() {
-        KVTSession session = this.threadLocalSession.get();
-        if (session == null) {
-            session = new KVTSession(this.config, this.database);
-            this.threadLocalSession.set(session);
-            LOG.debug("Created new KVT session for thread {}", 
-                     Thread.currentThread().getName());
-        }
-        return session;
+    @Override
+    public void open() throws Exception {
+        this.opened = true;
+        LOG.info("Opened KVT session pool");
     }
     
     @Override
-    public void close() {
-        // Clean up the session for the current thread
-        KVTSession session = this.threadLocalSession.get();
-        if (session != null) {
-            session.close();
-            this.threadLocalSession.remove();
-            LOG.debug("Closed KVT session for thread {}", 
-                     Thread.currentThread().getName());
-        }
+    protected boolean opened() {
+        return this.opened;
     }
     
     @Override
-    public boolean closed() {
-        return this.threadLocalSession.get() == null;
+    public BackendSession session() {
+        return (BackendSession) this.getOrNewSession();
+    }
+    
+    @Override
+    protected BackendSession newSession() {
+        return new KVTSession(this.config(), this.database);
+    }
+    
+    @Override
+    protected void doClose() {
+        this.opened = false;
+        LOG.info("Closed KVT session pool");
     }
 }

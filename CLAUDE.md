@@ -157,7 +157,7 @@ mvn test -Dbackend=rocksdb
 
 - Use hugegraph-kvt/ as the main directory we operate on. When you need to understand how integration works, look at other directories. Do understand that kvt is a C++ codebase, so we need JNI integration, but we want to treat it as a distributed, scalable, persistent, transactional and so on, and implement all the features of hugegraph on top of it.
 
-- hugegraph-kvt/KVT_README.md contains instructions and build methods. Update it if you see fit.
+- hugegraph-kvt/KVT_README.md contains instructions and build methods. Update it if you see fi
 
 
 
