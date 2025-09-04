@@ -118,6 +118,20 @@ cd hugegraph-server/hugegraph-kvt
 mvn test
 ```
 
+### Simple Integration Test
+```bash
+# Compile and run the simple KVT test
+javac -cp "src/main/java:target/classes" src/test/java/SimpleKVTTest.java -d target/test-classes
+java -Djava.library.path=src/main/resources/native -cp "src/main/java:target/classes:target/test-classes" SimpleKVTTest
+```
+
+### Batch Operations Test
+```bash
+# Compile and run the batch operations test
+javac -cp "src/main/java:target/classes" src/test/java/TestBatchOperations.java -d target/test-classes
+java -Djava.library.path=src/main/resources/native -cp "src/main/java:target/classes:target/test-classes" TestBatchOperations
+```
+
 ### Integration Tests
 ```bash
 # Run HugeGraph tests with KVT backend
@@ -137,7 +151,11 @@ mvn test -Dtest=KVTPerformanceTest -Dbackend=kvt
 ### JNI Layer
 The JNI (Java Native Interface) layer provides the bridge between Java and C++ code:
 - `KVTNative.java`: Java class with native method declarations
-- `KVTJNIBridge.cpp`: C++ implementation of JNI functions
+- `KVTJNIBridge.cpp`: C++ implementation of JNI functions (fully implemented)
+  - All KVT operations are bridged: get, set, delete, scan
+  - Batch operations supported via `nativeBatchExecute`
+  - Table management functions: create, drop, list tables
+  - Full transaction support: start, commit, rollback
 - Handles data type conversions and memory management
 
 ### Storage Model
@@ -234,6 +252,29 @@ gdb java
 (gdb) set environment LD_LIBRARY_PATH /path/to/kvt
 (gdb) run -jar hugegraph-server.jar
 ```
+
+## Implementation Status
+
+### Completed Features
+- ✅ Full JNI bridge implementation (KVTJNIBridge.cpp)
+- ✅ Batch operations support
+- ✅ Table management (create, drop, list)
+- ✅ Transaction management (ACID compliance)
+- ✅ Basic CRUD operations (get, set, delete)
+- ✅ Range scans for ordered traversal
+- ✅ Build scripts for native libraries
+
+### Test Coverage
+- ✅ SimpleKVTTest: Basic operations and transaction flow
+- ✅ TestBatchOperations: Batch execute and list tables
+- ✅ Native library loading and JNI integration
+
+### Known Limitations (kvt_memory.o implementation)
+- In-memory only (no persistence) - This is specific to the test implementation
+- Single-process only - Production implementations should support distributed access
+- No WAL/durability - Production implementations should provide durability guarantees
+
+Note: These limitations apply only to the kvt_memory.o test implementation. Production KVT implementations should provide full durability, scalability, and distributed capabilities as specified in the interface requirements.
 
 ## Contributing
 Please follow the HugeGraph contribution guidelines when submitting patches or features for the KVT backend.

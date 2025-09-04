@@ -364,3 +364,134 @@ JNIEXPORT jobjectArray JNICALL Java_org_apache_hugegraph_backend_store_kvt_KVTNa
     KVTError error = kvt_rollback_transaction(static_cast<uint64_t>(txId), errorMsg);
     return CreateErrorResult(env, error, errorMsg);
 }
+
+/*
+ * Class:     org_apache_hugegraph_backend_store_kvt_KVTNative
+ * Method:    nativeListTables
+ * Signature: ()[Ljava/lang/Object;
+ */
+JNIEXPORT jobjectArray JNICALL Java_org_apache_hugegraph_backend_store_kvt_KVTNative_nativeListTables
+  (JNIEnv *env, jclass cls) {
+    std::vector<std::pair<std::string, uint64_t>> results;
+    std::string errorMsg;
+    KVTError error = kvt_list_tables(results, errorMsg);
+    
+    jclass objectClass = env->FindClass("java/lang/Object");
+    jobjectArray result = env->NewObjectArray(4, objectClass, nullptr);
+    
+    jclass integerClass = env->FindClass("java/lang/Integer");
+    jmethodID intValueOf = env->GetStaticMethodID(integerClass, "valueOf", "(I)Ljava/lang/Integer;");
+    jobject errorCode = env->CallStaticObjectMethod(integerClass, intValueOf, static_cast<jint>(error));
+    
+    // Create arrays for table names and IDs
+    jclass stringClass = env->FindClass("java/lang/String");
+    jobjectArray tableNames = env->NewObjectArray(static_cast<jsize>(results.size()), stringClass, nullptr);
+    
+    jclass longClass = env->FindClass("java/lang/Long");
+    jobjectArray tableIds = env->NewObjectArray(static_cast<jsize>(results.size()), longClass, nullptr);
+    jmethodID longValueOf = env->GetStaticMethodID(longClass, "valueOf", "(J)Ljava/lang/Long;");
+    
+    for (size_t i = 0; i < results.size(); ++i) {
+        env->SetObjectArrayElement(tableNames, static_cast<jsize>(i), 
+                                  StringToJava(env, results[i].first));
+        jobject tableId = env->CallStaticObjectMethod(longClass, longValueOf, 
+                                                      static_cast<jlong>(results[i].second));
+        env->SetObjectArrayElement(tableIds, static_cast<jsize>(i), tableId);
+    }
+    
+    env->SetObjectArrayElement(result, 0, errorCode);
+    env->SetObjectArrayElement(result, 1, tableNames);
+    env->SetObjectArrayElement(result, 2, tableIds);
+    env->SetObjectArrayElement(result, 3, StringToJava(env, errorMsg));
+    
+    return result;
+}
+
+/*
+ * Class:     org_apache_hugegraph_backend_store_kvt_KVTNative
+ * Method:    nativeBatchExecute
+ * Signature: (J[I[J[[B[[B)[Ljava/lang/Object;
+ */
+JNIEXPORT jobjectArray JNICALL Java_org_apache_hugegraph_backend_store_kvt_KVTNative_nativeBatchExecute
+  (JNIEnv *env, jclass cls, jlong txId, jintArray opTypes, 
+   jlongArray tableIds, jobjectArray keys, jobjectArray values) {
+    
+    // Get array lengths
+    jsize numOps = env->GetArrayLength(opTypes);
+    
+    // Get the arrays
+    jint* opTypesArray = env->GetIntArrayElements(opTypes, nullptr);
+    jlong* tableIdsArray = env->GetLongArrayElements(tableIds, nullptr);
+    
+    // Build the batch operations
+    KVTBatchOps batchOps;
+    batchOps.reserve(numOps);
+    
+    for (jsize i = 0; i < numOps; ++i) {
+        KVTOp op;
+        op.op = static_cast<KVT_OPType>(opTypesArray[i]);
+        op.table_id = static_cast<uint64_t>(tableIdsArray[i]);
+        
+        // Get key
+        jbyteArray keyArray = (jbyteArray)env->GetObjectArrayElement(keys, i);
+        if (keyArray != nullptr) {
+            op.key = ByteArrayToString(env, keyArray);
+            env->DeleteLocalRef(keyArray);
+        }
+        
+        // Get value (may be null for GET and DEL operations)
+        if (values != nullptr) {
+            jbyteArray valueArray = (jbyteArray)env->GetObjectArrayElement(values, i);
+            if (valueArray != nullptr) {
+                op.value = ByteArrayToString(env, valueArray);
+                env->DeleteLocalRef(valueArray);
+            }
+        }
+        
+        batchOps.push_back(op);
+    }
+    
+    // Release the arrays
+    env->ReleaseIntArrayElements(opTypes, opTypesArray, JNI_ABORT);
+    env->ReleaseLongArrayElements(tableIds, tableIdsArray, JNI_ABORT);
+    
+    // Execute the batch
+    KVTBatchResults batchResults;
+    std::string errorMsg;
+    KVTError error = kvt_batch_execute(static_cast<uint64_t>(txId), 
+                                       batchOps, batchResults, errorMsg);
+    
+    // Prepare the result
+    jclass objectClass = env->FindClass("java/lang/Object");
+    jobjectArray result = env->NewObjectArray(4, objectClass, nullptr);
+    
+    jclass integerClass = env->FindClass("java/lang/Integer");
+    jmethodID intValueOf = env->GetStaticMethodID(integerClass, "valueOf", "(I)Ljava/lang/Integer;");
+    jobject errorCode = env->CallStaticObjectMethod(integerClass, intValueOf, static_cast<jint>(error));
+    
+    // Create arrays for result codes and values
+    jintArray resultCodes = env->NewIntArray(static_cast<jsize>(batchResults.size()));
+    jclass byteArrayClass = env->FindClass("[B");
+    jobjectArray resultValues = env->NewObjectArray(static_cast<jsize>(batchResults.size()), 
+                                                    byteArrayClass, nullptr);
+    
+    // Fill the result arrays
+    jint* resultCodesArray = env->GetIntArrayElements(resultCodes, nullptr);
+    for (size_t i = 0; i < batchResults.size(); ++i) {
+        resultCodesArray[i] = static_cast<jint>(batchResults[i].error);
+        
+        // For GET operations, include the value if successful
+        if (batchOps[i].op == OP_GET && batchResults[i].error == KVTError::SUCCESS) {
+            env->SetObjectArrayElement(resultValues, static_cast<jsize>(i), 
+                                      StringToByteArray(env, batchResults[i].value));
+        }
+    }
+    env->ReleaseIntArrayElements(resultCodes, resultCodesArray, 0);
+    
+    env->SetObjectArrayElement(result, 0, errorCode);
+    env->SetObjectArrayElement(result, 1, resultCodes);
+    env->SetObjectArrayElement(result, 2, resultValues);
+    env->SetObjectArrayElement(result, 3, StringToJava(env, errorMsg));
+    
+    return result;
+}
