@@ -71,7 +71,8 @@ public class TestKVTSerialization {
         Id sourceId = IdGenerator.of(100);
         Id targetId = IdGenerator.of(200);
         Id labelId = IdGenerator.of(1);
-        EdgeId edgeId = new EdgeId(sourceId, Directions.OUT, labelId, "", targetId);
+        // EdgeId constructor needs: ownerVertexId, direction, edgeLabelId, subLabelId, sortValues, otherVertexId
+        EdgeId edgeId = new EdgeId(sourceId, Directions.OUT, labelId, labelId, "", targetId);
         
         byte[] edgeBytes = KVTIdUtil.edgeIdToBytes(edgeId);
         assert edgeBytes.length > 0 : "Edge ID serialization failed";
@@ -111,7 +112,7 @@ public class TestKVTSerialization {
         
         // Test string
         String stringValue = "Hello, KVT!";
-        byte[] stringBytes = KVTSerializer.serialize(stringValue, DataType.STRING);
+        byte[] stringBytes = KVTSerializer.serialize(stringValue, DataType.TEXT);
         String recoveredString = (String)KVTSerializer.deserialize(stringBytes);
         assert stringValue.equals(recoveredString) : "String serialization failed";
         

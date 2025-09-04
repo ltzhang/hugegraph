@@ -4,11 +4,11 @@ import org.apache.hugegraph.backend.id.IdGenerator;
 import org.apache.hugegraph.backend.query.*;
 import org.apache.hugegraph.backend.store.BackendEntry;
 import org.apache.hugegraph.backend.store.BackendMutation;
-import org.apache.hugegraph.backend.tx.IsolationLevel;
 import org.apache.hugegraph.config.HugeConfig;
 import org.apache.hugegraph.type.HugeType;
 import org.apache.hugegraph.type.define.HugeKeys;
 import org.apache.hugegraph.type.define.IndexType;
+import org.apache.hugegraph.type.define.Action;
 
 import java.util.*;
 import java.util.concurrent.*;
@@ -18,6 +18,12 @@ import java.util.concurrent.atomic.*;
  * Comprehensive integration test suite for KVT backend
  */
 public class TestKVTIntegration {
+    
+    // Functional interface that allows throwing Exception
+    @FunctionalInterface
+    interface TestCase {
+        void run() throws Exception;
+    }
 
     static {
         // Load the JNI library
@@ -183,7 +189,8 @@ public class TestKVTIntegration {
         
         // Create stores
         String graph = "test_graph";
-        store = (KVTStore) provider.newGraphStore(graph);
+        // Use loadGraphStore instead of protected newGraphStore
+        store = (KVTStore) provider.loadGraphStore(config);
         store.open(config);
         store.init();
         
@@ -217,7 +224,7 @@ public class TestKVTIntegration {
         return null; // Placeholder
     }
     
-    private static boolean runTestSuite(Runnable test) {
+    private static boolean runTestSuite(TestCase test) {
         try {
             test.run();
             System.out.println("   ✓ Passed");
@@ -244,7 +251,7 @@ public class TestKVTIntegration {
         entry.column("age".getBytes(), "30".getBytes());
         
         BackendMutation mutation = new BackendMutation();
-        mutation.add(entry, BackendMutation.Action.INSERT);
+        mutation.add(entry, Action.INSERT);
         store.mutate(mutation);
         
         // Test Read
@@ -259,12 +266,12 @@ public class TestKVTIntegration {
         // Test Update
         entry.column("age".getBytes(), "31".getBytes());
         mutation = new BackendMutation();
-        mutation.add(entry, BackendMutation.Action.UPDATE);
+        mutation.add(entry, Action.APPEND);
         store.mutate(mutation);
         
         // Test Delete
         mutation = new BackendMutation();
-        mutation.add(entry, BackendMutation.Action.DELETE);
+        mutation.add(entry, Action.DELETE);
         store.mutate(mutation);
         
         // Verify deletion
@@ -281,7 +288,7 @@ public class TestKVTIntegration {
         entry1.column("tx".getBytes(), "commit".getBytes());
         
         BackendMutation mutation = new BackendMutation();
-        mutation.add(entry1, BackendMutation.Action.INSERT);
+        mutation.add(entry1, Action.INSERT);
         store.mutate(mutation);
         
         store.commitTx();
@@ -300,7 +307,7 @@ public class TestKVTIntegration {
         entry2.column("tx".getBytes(), "rollback".getBytes());
         
         mutation = new BackendMutation();
-        mutation.add(entry2, BackendMutation.Action.INSERT);
+        mutation.add(entry2, Action.INSERT);
         store.mutate(mutation);
         
         store.rollbackTx();
@@ -321,7 +328,7 @@ public class TestKVTIntegration {
             entry.column("index".getBytes(), String.valueOf(i).getBytes());
             
             BackendMutation mutation = new BackendMutation();
-            mutation.add(entry, BackendMutation.Action.INSERT);
+            mutation.add(entry, Action.INSERT);
             store.mutate(mutation);
         }
         
@@ -374,8 +381,8 @@ public class TestKVTIntegration {
     }
     
     private static void testBatchOperations() throws Exception {
-        KVTSessionV2 session = new KVTSessionV2(config, "test");
-        session.enableBatch(100);
+        KVTSession session = new KVTSession(config, "test");
+        // session.enableBatch(100); // Method doesn't exist in current API
         
         // Batch insert
         session.beginTx();
@@ -386,11 +393,11 @@ public class TestKVTIntegration {
             entry.column("batch".getBytes(), "true".getBytes());
             
             BackendMutation mutation = new BackendMutation();
-            mutation.add(entry, BackendMutation.Action.INSERT);
+            mutation.add(entry, Action.INSERT);
             store.mutate(mutation);
         }
         
-        session.flushBatch();
+        // session.flushBatch(); // Method doesn't exist in current API
         session.commitTx();
         
         // Verify batch insert
@@ -448,7 +455,7 @@ public class TestKVTIntegration {
                                    String.valueOf(threadId).getBytes());
                         
                         BackendMutation mutation = new BackendMutation();
-                        mutation.add(entry, BackendMutation.Action.INSERT);
+                        mutation.add(entry, Action.INSERT);
                         
                         synchronized(store) {
                             store.beginTx();
@@ -485,7 +492,7 @@ public class TestKVTIntegration {
             entry.column("perf".getBytes(), "test".getBytes());
             
             BackendMutation mutation = new BackendMutation();
-            mutation.add(entry, BackendMutation.Action.INSERT);
+            mutation.add(entry, Action.INSERT);
             store.mutate(mutation);
         }
         
@@ -537,7 +544,7 @@ public class TestKVTIntegration {
         KVTBackendEntry emptyEntry = new KVTBackendEntry(HugeType.VERTEX, emptyId);
         
         BackendMutation mutation = new BackendMutation();
-        mutation.add(emptyEntry, BackendMutation.Action.INSERT);
+        mutation.add(emptyEntry, Action.INSERT);
         store.mutate(mutation);
         
         // Large entry
@@ -548,12 +555,13 @@ public class TestKVTIntegration {
         largeEntry.column("large".getBytes(), largeValue);
         
         mutation = new BackendMutation();
-        mutation.add(largeEntry, BackendMutation.Action.INSERT);
+        mutation.add(largeEntry, Action.INSERT);
         store.mutate(mutation);
         
         // Verify both
         IdQuery query = new IdQuery(HugeType.VERTEX);
-        query.query(emptyId, largeId);
+        query.query(emptyId);
+        query.query(largeId);
         Iterator<BackendEntry> results = store.query(query);
         
         int count = 0;
