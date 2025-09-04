@@ -74,7 +74,17 @@ public class KVTIdUtil {
         
         // Skip the type prefix and create ID from remaining bytes
         byte[] idBytes = Arrays.copyOfRange(bytes, 1, bytes.length);
-        return IdGenerator.of(idBytes);
+        
+        // For now, assume LONG type IDs (most common case)
+        // This is a limitation - we'd need to store ID type info to handle all cases
+        if (idBytes.length == 8) {
+            // Likely a long ID
+            long value = ByteBuffer.wrap(idBytes).getLong();
+            return IdGenerator.of(value);
+        } else {
+            // Try to parse as string ID
+            return IdGenerator.of(new String(idBytes));
+        }
     }
     
     /**
@@ -152,7 +162,11 @@ public class KVTIdUtil {
             byte prefix = typePrefixByte(type);
             return new byte[] { (byte)(prefix + 1) };
         }
-        return idToBytes(type, endId);
+        // For exclusive end, append a byte to make it > endId
+        byte[] endBytes = idToBytes(type, endId);
+        byte[] result = Arrays.copyOf(endBytes, endBytes.length + 1);
+        result[result.length - 1] = 0; // This makes it just past endId
+        return result;
     }
     
     /**
@@ -240,7 +254,10 @@ public class KVTIdUtil {
         int minLength = Math.min(id1.length, id2.length);
         
         for (int i = 0; i < minLength; i++) {
-            int cmp = Byte.compare(id1[i], id2[i]);
+            // Use unsigned byte comparison
+            int b1 = id1[i] & 0xFF;
+            int b2 = id2[i] & 0xFF;
+            int cmp = Integer.compare(b1, b2);
             if (cmp != 0) {
                 return cmp;
             }

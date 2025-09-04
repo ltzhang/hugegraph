@@ -45,14 +45,22 @@ fi
 print_status "Prerequisites check passed"
 echo
 
-# Build KVT C++ library if needed
-print_info "Checking KVT native library..."
-if [ -f "kvt/libkvt.so" ]; then
-    print_status "KVT library found (size: $(stat -c%s kvt/libkvt.so) bytes)"
+# Build native libraries using build-native.sh
+print_info "Building native libraries..."
+if [ -f "build-native.sh" ]; then
+    chmod +x build-native.sh
+    ./build-native.sh --keep-objects
+    if [ $? -eq 0 ]; then
+        print_status "Native libraries built successfully"
+    else
+        print_error "Failed to build native libraries"
+        exit 1
+    fi
 else
-    print_info "Building KVT library..."
+    # Fallback to direct build if build-native.sh doesn't exist
+    print_info "Building KVT library directly..."
     cd kvt
-    g++ -shared -fPIC -std=c++11 kvt_mem.cpp -o libkvt.so
+    g++ -shared -fPIC -std=c++17 -O2 kvt_mem.cpp -o libkvt.so
     if [ $? -eq 0 ]; then
         print_status "KVT library built successfully"
     else
@@ -73,35 +81,49 @@ mkdir -p target/lib
 print_status "Directories created"
 echo
 
-# Copy native library
+# Copy native libraries
 print_info "Copying native libraries..."
-cp kvt/libkvt.so target/native/
-cp kvt/kvt_memory.o target/native/
+if [ -f "src/main/resources/native/libkvtjni.so" ]; then
+    cp src/main/resources/native/*.so target/native/
+    print_status "Copied libkvtjni.so and libkvt.so from resources"
+elif [ -f "kvt/libkvt.so" ]; then
+    cp kvt/libkvt.so target/native/
+    print_status "Copied libkvt.so from kvt directory"
+fi
+
+# Copy object files if they exist
+if [ -f "kvt/kvt_memory.o" ]; then
+    cp kvt/kvt_memory.o target/native/
+    print_status "Copied kvt_memory.o"
+fi
 
 print_status "Native libraries copied"
 echo
 
-# Compile test
-print_info "Compiling test classes..."
-javac -d target/test-classes src/test/java/TestKVTLibrary.java
-
-if [ $? -eq 0 ]; then
-    print_status "Test classes compiled"
+# Compile test classes if source exists
+if [ -f "src/test/java/TestKVTLibrary.java" ]; then
+    print_info "Compiling test classes..."
+    javac -d target/test-classes src/test/java/TestKVTLibrary.java
+    
+    if [ $? -eq 0 ]; then
+        print_status "Test classes compiled"
+        
+        # Run tests
+        print_info "Running basic library test..."
+        echo "----------------------------------------"
+        java -cp target/test-classes -Djava.library.path=src/main/resources/native TestKVTLibrary
+        if [ $? -eq 0 ]; then
+            print_status "Library test passed"
+        else
+            print_error "Library test failed"
+            exit 1
+        fi
+    else
+        print_error "Failed to compile test classes"
+        exit 1
+    fi
 else
-    print_error "Failed to compile test classes"
-    exit 1
-fi
-echo
-
-# Run tests
-print_info "Running basic library test..."
-echo "----------------------------------------"
-java -cp target/test-classes TestKVTLibrary
-if [ $? -eq 0 ]; then
-    print_status "Library test passed"
-else
-    print_error "Library test failed"
-    exit 1
+    print_info "Skipping test compilation (TestKVTLibrary.java not found)"
 fi
 echo
 
@@ -137,8 +159,15 @@ echo
 # Print summary
 echo "=== Build Summary ==="
 echo
-print_status "Native library: $(ls -lh kvt/libkvt.so | awk '{print $5}')"
-print_status "Test status: PASSED"
+if [ -f "src/main/resources/native/libkvtjni.so" ]; then
+    print_status "libkvtjni.so: $(ls -lh src/main/resources/native/libkvtjni.so | awk '{print $5}')"
+    print_status "libkvt.so: $(ls -lh src/main/resources/native/libkvt.so | awk '{print $5}')"
+elif [ -f "kvt/libkvt.so" ]; then
+    print_status "libkvt.so: $(ls -lh kvt/libkvt.so | awk '{print $5}')"
+fi
+if [ -f "src/test/java/TestKVTLibrary.java" ]; then
+    print_status "Test status: PASSED"
+fi
 print_status "Distribution: dist/hugegraph-kvt-1.5.0.tar.gz"
 echo
 echo "Build completed successfully!"

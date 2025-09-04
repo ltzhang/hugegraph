@@ -153,7 +153,9 @@ public class KVTBackendEntry extends BinaryBackendEntry {
         this.bytesValue = null;
     }
     
+    @Override
     public void clear() {
+        super.clear();  // Clear parent columns
         this.bytesValue = null;
     }
     

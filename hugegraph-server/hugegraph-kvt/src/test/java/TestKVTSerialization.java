@@ -156,11 +156,19 @@ public class TestKVTSerialization {
         byte[] partialEnd = KVTIdUtil.scanEndKey(HugeType.EDGE_OUT, endId);
         
         assert partialStart[0] == 0x02 : "Edge out prefix should be 0x02";
+        // End key now has an extra byte, so checking just first byte
         assert partialEnd[0] == 0x02 : "Edge out prefix should be maintained";
         
-        // Test comparison
+        // Test comparison - end key should be greater
+        // Note: Since startId=100 and endId=200, endId should be > startId
         int cmp = KVTIdUtil.compareIdBytes(partialStart, partialEnd);
-        assert cmp < 0 : "Start should be less than end";
+        
+        // Debug: print actual bytes
+        System.out.println("   Start ID: 100, End ID: 200");
+        System.out.println("   Start key length: " + partialStart.length + ", End key length: " + partialEnd.length);
+        
+        // The comparison should show start < end
+        assert cmp < 0 : "Start (100) should be less than end (200), but comparison returned: " + cmp;
     }
     
     private static void testBackendEntrySerialization() {

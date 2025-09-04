@@ -89,3 +89,5 @@ hs_err_pid*
 hugegraph-server/hugegraph-dist/docker/data/
 hugegraph-server/hugegraph-kvt/src/main/resources/native/libkvt.so
 hugegraph-server/hugegraph-kvt/src/main/resources/native/libkvtjni.so
+hugegraph-server/hugegraph-kvt/kvt/kvt_memory.o
+hugegraph-server/hugegraph-kvt/kvt/libkvt.so
