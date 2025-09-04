@@ -147,10 +147,10 @@ public class KVTQueryTranslator {
         byte[] endKey = null;
         
         if (startId != null) {
-            startKey = KVTIdUtil.idToKey(startId, type);
+            startKey = KVTIdUtil.idToBytes(type, startId);
         }
         if (endId != null) {
-            endKey = KVTIdUtil.idToKey(endId, type);
+            endKey = KVTIdUtil.idToBytes(type, endId);
         }
         
         return new ScanRange(startKey, endKey, startInclusive, endInclusive,

@@ -233,28 +233,28 @@ public abstract class KVTStore extends AbstractBackendStore<KVTSession> {
     @Override
     public void beginTx() {
         this.checkOpened();
-        KVTSession session = this.sessions.session();
+        KVTSession session = (KVTSession) this.sessions.session();
         session.beginTx();
     }
     
     @Override
     public void commitTx() {
         this.checkOpened();
-        KVTSession session = this.sessions.session();
+        KVTSession session = (KVTSession) this.sessions.session();
         session.commitTx();
     }
     
     @Override
     public void rollbackTx() {
         this.checkOpened();
-        KVTSession session = this.sessions.session();
+        KVTSession session = (KVTSession) this.sessions.session();
         session.rollbackTx();
     }
     
     @Override
     public void mutate(BackendMutation mutation) {
         this.checkOpened();
-        KVTSession session = this.sessions.session();
+        KVTSession session = (KVTSession) this.sessions.session();
         
         for (Iterator<BackendAction> it = mutation.mutation(); it.hasNext();) {
             BackendAction action = it.next();
@@ -289,7 +289,7 @@ public abstract class KVTStore extends AbstractBackendStore<KVTSession> {
     @Override
     public Iterator<BackendEntry> query(Query query) {
         this.checkOpened();
-        KVTSession session = this.sessions.session();
+        KVTSession session = (KVTSession) this.sessions.session();
         KVTTable table = (KVTTable) this.table(query.resultType());
         return table.query(session, query);
     }
@@ -297,7 +297,7 @@ public abstract class KVTStore extends AbstractBackendStore<KVTSession> {
     @Override
     public Number queryNumber(Query query) {
         this.checkOpened();
-        KVTSession session = this.sessions.session();
+        KVTSession session = (KVTSession) this.sessions.session();
         KVTTable table = (KVTTable) this.table(query.resultType());
         return table.queryNumber(session, query);
     }
@@ -326,7 +326,7 @@ public abstract class KVTStore extends AbstractBackendStore<KVTSession> {
     @Override
     protected KVTSession session(HugeType type) {
         this.checkOpened();
-        return this.sessions.session();
+        return (KVTSession) this.sessions.session();
     }
     
     protected void checkOpened() throws ConnectionException {

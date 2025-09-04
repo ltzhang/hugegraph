@@ -74,7 +74,6 @@ public class KVTSerializer {
             case DOUBLE:
                 return serializeDouble((Double) value);
             case TEXT:
-            case STRING:
                 return serializeString((String) value);
             case BLOB:
                 return serializeBytes((byte[]) value);

@@ -138,7 +138,7 @@ public class KVTIdUtil {
     public static byte[] scanStartKey(HugeType type, Id startId) {
         if (startId == null) {
             // Return just the type prefix for scanning from beginning
-            return new byte[] { typePrefix(type) };
+            return new byte[] { typePrefixByte(type) };
         }
         return idToBytes(type, startId);
     }
@@ -149,7 +149,7 @@ public class KVTIdUtil {
     public static byte[] scanEndKey(HugeType type, Id endId) {
         if (endId == null) {
             // Return next prefix value for scanning to end of type range
-            byte prefix = typePrefix(type);
+            byte prefix = typePrefixByte(type);
             return new byte[] { (byte)(prefix + 1) };
         }
         return idToBytes(type, endId);
@@ -183,7 +183,10 @@ public class KVTIdUtil {
                 return PREFIX_INDEX_LABEL;
             case SECONDARY_INDEX:
                 return PREFIX_SECONDARY_INDEX;
-            case RANGE_INDEX:
+            case RANGE_INT_INDEX:
+            case RANGE_FLOAT_INDEX:
+            case RANGE_LONG_INDEX:
+            case RANGE_DOUBLE_INDEX:
                 return PREFIX_RANGE_INDEX;
             case SEARCH_INDEX:
                 return PREFIX_SEARCH_INDEX;
@@ -218,7 +221,7 @@ public class KVTIdUtil {
             case PREFIX_SECONDARY_INDEX:
                 return HugeType.SECONDARY_INDEX;
             case PREFIX_RANGE_INDEX:
-                return HugeType.RANGE_INDEX;
+                return HugeType.RANGE_INT_INDEX;  // Default to int range index
             case PREFIX_SEARCH_INDEX:
                 return HugeType.SEARCH_INDEX;
             case PREFIX_UNIQUE_INDEX:

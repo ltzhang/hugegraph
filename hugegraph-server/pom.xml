@@ -72,9 +72,7 @@
         <module>hugegraph-hbase</module>
         <module>hugegraph-postgresql</module>
         <module>hugegraph-hstore</module>
-        <!-- KVT module temporarily disabled due to API incompatibilities
         <module>hugegraph-kvt</module>
-        -->
     </modules>
 
     <dependencyManagement>

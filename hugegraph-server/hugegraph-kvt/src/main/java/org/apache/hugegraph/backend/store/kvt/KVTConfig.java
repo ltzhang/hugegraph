@@ -20,6 +20,10 @@ package org.apache.hugegraph.backend.store.kvt;
 import org.apache.hugegraph.config.ConfigOption;
 import org.apache.hugegraph.config.OptionHolder;
 
+import static org.apache.hugegraph.config.OptionChecker.disallowEmpty;
+import static org.apache.hugegraph.config.OptionChecker.allowValues;
+import static org.apache.hugegraph.config.OptionChecker.rangeInt;
+
 /**
  * Configuration options for KVT backend.
  */
@@ -291,7 +295,6 @@ public class KVTConfig extends OptionHolder {
             return new ConfigOption<>(
                     prefix + "." + key,
                     "",
-                    disallowEmpty(),
                     defaultValue
             );
         }
@@ -300,7 +303,6 @@ public class KVTConfig extends OptionHolder {
             return new ConfigOption<>(
                     prefix + "." + key,
                     "",
-                    rangeInt(Integer.MIN_VALUE, Integer.MAX_VALUE),
                     defaultValue
             );
         }
@@ -309,7 +311,6 @@ public class KVTConfig extends OptionHolder {
             return new ConfigOption<>(
                     prefix + "." + key,
                     "",
-                    rangeInt(Long.MIN_VALUE, Long.MAX_VALUE),
                     defaultValue
             );
         }
@@ -318,7 +319,6 @@ public class KVTConfig extends OptionHolder {
             return new ConfigOption<>(
                     prefix + "." + key,
                     "",
-                    disallowEmpty(),
                     defaultValue
             );
         }

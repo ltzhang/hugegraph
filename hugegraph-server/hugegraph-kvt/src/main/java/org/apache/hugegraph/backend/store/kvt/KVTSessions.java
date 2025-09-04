@@ -32,11 +32,13 @@ public class KVTSessions extends BackendSessionPool {
     private static final Logger LOG = Log.logger(KVTSessions.class);
     
     private final String database;
+    private final String store;
     private boolean opened;
     
     public KVTSessions(HugeConfig config, String database, String store) {
         super(config, store);
         this.database = database;
+        this.store = store;
         this.opened = false;
         
         LOG.debug("Created KVTSessions for database '{}', store '{}'", 

@@ -18,6 +18,7 @@
 package org.apache.hugegraph.backend.store.kvt;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
@@ -75,7 +76,7 @@ public class KVTQueryOptimizer {
      * Optimize ID query
      */
     private static QueryPlan optimizeIdQuery(IdQuery query, HugeType type) {
-        Set<Id> ids = query.ids();
+        Collection<Id> ids = query.ids();
         
         if (ids.size() == 1) {
             // Single ID - use direct get
@@ -157,7 +158,11 @@ public class KVTQueryOptimizer {
      * Estimate selectivity score (lower is more selective)
      */
     private static int getSelectivityScore(Condition condition) {
-        switch (condition.relation()) {
+        if (!(condition instanceof Condition.Relation)) {
+            return 10; // Not a relation condition
+        }
+        Condition.Relation rel = (Condition.Relation) condition;
+        switch (rel.relation()) {
             case EQ:
                 return 1;  // Equality is most selective
             case IN:
@@ -181,7 +186,7 @@ public class KVTQueryOptimizer {
     /**
      * Check if IDs are sequential/close together
      */
-    private static boolean areIdsSequential(Set<Id> ids) {
+    private static boolean areIdsSequential(Collection<Id> ids) {
         if (ids.size() < 2) {
             return false;
         }
@@ -198,7 +203,7 @@ public class KVTQueryOptimizer {
     /**
      * Convert ID query to range query
      */
-    private static ConditionQuery convertToRangeQuery(IdQuery query, Set<Id> ids) {
+    private static ConditionQuery convertToRangeQuery(IdQuery query, Collection<Id> ids) {
         List<Id> sortedIds = new ArrayList<>(ids);
         Collections.sort(sortedIds);
         
@@ -219,15 +224,25 @@ public class KVTQueryOptimizer {
     private static IndexHint findBestIndex(List<Condition> conditions, HugeType type) {
         // Check for label index
         for (Condition c : conditions) {
-            if (c.key() == HugeKeys.LABEL && c.relation() == Condition.RelationType.EQ) {
-                return new IndexHint("label_index", c.value());
+            if (c instanceof Condition.Relation) {
+                Condition.Relation r = (Condition.Relation) c;
+                if (r.key() instanceof HugeKeys && 
+                    r.key() == HugeKeys.LABEL && 
+                    r.relation() == Condition.RelationType.EQ) {
+                    return new IndexHint("label_index", r.value());
+                }
             }
         }
         
         // Check for property indexes
         for (Condition c : conditions) {
-            if (c.key() == HugeKeys.PROPERTIES && c.relation() == Condition.RelationType.EQ) {
-                return new IndexHint("property_index", c.value());
+            if (c instanceof Condition.Relation) {
+                Condition.Relation r = (Condition.Relation) c;
+                if (r.key() instanceof HugeKeys && 
+                    r.key() == HugeKeys.PROPERTIES && 
+                    r.relation() == Condition.RelationType.EQ) {
+                    return new IndexHint("property_index", r.value());
+                }
             }
         }
         
@@ -239,14 +254,17 @@ public class KVTQueryOptimizer {
      */
     private static boolean hasRangeCondition(List<Condition> conditions) {
         for (Condition c : conditions) {
-            switch (c.relation()) {
-                case GT:
-                case GTE:
-                case LT:
-                case LTE:
-                    return true;
-                default:
-                    continue;
+            if (c instanceof Condition.Relation) {
+                Condition.Relation rel = (Condition.Relation) c;
+                switch (rel.relation()) {
+                    case GT:
+                    case GTE:
+                    case LT:
+                    case LTE:
+                        return true;
+                    default:
+                        continue;
+                }
             }
         }
         return false;
@@ -260,21 +278,24 @@ public class KVTQueryOptimizer {
         Id end = null;
         
         for (Condition c : conditions) {
-            if (c.key() != HugeKeys.ID) {
-                continue;
-            }
-            
-            switch (c.relation()) {
-                case GT:
-                case GTE:
-                    start = (Id) c.value();
-                    break;
-                case LT:
-                case LTE:
-                    end = (Id) c.value();
-                    break;
-                default:
-                    break;
+            if (c instanceof Condition.Relation) {
+                Condition.Relation r = (Condition.Relation) c;
+                if (!(r.key() instanceof HugeKeys) || r.key() != HugeKeys.ID) {
+                    continue;
+                }
+                
+                switch (r.relation()) {
+                    case GT:
+                    case GTE:
+                        start = (Id) r.value();
+                        break;
+                    case LT:
+                    case LTE:
+                        end = (Id) r.value();
+                        break;
+                    default:
+                        break;
+                }
             }
         }
         
@@ -291,8 +312,11 @@ public class KVTQueryOptimizer {
     private static PrefixHint extractPrefixHint(List<Condition> conditions) {
         // Look for conditions that can be converted to prefix scan
         for (Condition c : conditions) {
-            if (c.relation() == Condition.RelationType.TEXT_CONTAINS_PREFIX) {
-                return new PrefixHint(c.value().toString());
+            if (c instanceof Condition.Relation) {
+                Condition.Relation r = (Condition.Relation) c;
+                if (r.relation() == Condition.RelationType.PREFIX) {
+                    return new PrefixHint(r.value().toString());
+                }
             }
         }
         return null;
@@ -306,7 +330,10 @@ public class KVTQueryOptimizer {
             case EDGE_OUT:
             case EDGE_IN:
             case SECONDARY_INDEX:
-            case RANGE_INDEX:
+            case RANGE_INT_INDEX:
+            case RANGE_FLOAT_INDEX:
+            case RANGE_LONG_INDEX:
+            case RANGE_DOUBLE_INDEX:
             case UNIQUE_INDEX:
             case SHARD_INDEX:
                 return true;
@@ -382,7 +409,11 @@ public class KVTQueryOptimizer {
         
         // Apply limit if specified
         if (plan.query.limit() != Query.NO_LIMIT) {
-            result = new LimitIterator<>(result, plan.query.limit());
+            final long limit = plan.query.limit();
+            final long[] count = {0};
+            result = new LimitIterator<BackendEntry>(result, entry -> {
+                return ++count[0] >= limit;
+            });
         }
         
         // Log optimization hint

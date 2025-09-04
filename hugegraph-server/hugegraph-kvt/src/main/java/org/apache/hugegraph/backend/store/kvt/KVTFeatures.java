@@ -61,8 +61,8 @@ public class KVTFeatures implements BackendFeatures {
     }
 
     @Override
-    public boolean supportsQueryWithLimit() {
-        // KVT scan supports limit
+    public boolean supportsQueryWithRangeCondition() {
+        // KVT supports range conditions on range-partitioned tables
         return true;
     }
 
@@ -84,11 +84,6 @@ public class KVTFeatures implements BackendFeatures {
         return false;
     }
 
-    @Override
-    public boolean supportsQueryWithContainsValue() {
-        // Property value containment check
-        return false;
-    }
 
     @Override
     public boolean supportsQueryByPage() {

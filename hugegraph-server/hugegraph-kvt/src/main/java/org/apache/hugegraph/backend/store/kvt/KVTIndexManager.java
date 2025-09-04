@@ -19,6 +19,7 @@ package org.apache.hugegraph.backend.store.kvt;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -148,7 +149,9 @@ public class KVTIndexManager {
             // Range scan for these index types
             byte[] prefix = buildIndexPrefix(indexType, indexId, indexValue);
             byte[] startKey = prefix;
-            byte[] endKey = Bytes.prefixNext(prefix);
+            // Create end key by incrementing last byte of prefix
+            byte[] endKey = Arrays.copyOf(prefix, prefix.length);
+            endKey[endKey.length - 1] = (byte)(endKey[endKey.length - 1] + 1);
             
             Iterator<KVTNative.KVTPair> pairs = 
                 this.session.scan(tableId, startKey, endKey, limit);
@@ -222,7 +225,9 @@ public class KVTIndexManager {
         
         byte[] prefix = indexId.asBytes();
         byte[] startKey = prefix;
-        byte[] endKey = Bytes.prefixNext(prefix);
+        // Create end key by incrementing last byte of prefix
+        byte[] endKey = Arrays.copyOf(prefix, prefix.length);
+        endKey[endKey.length - 1] = (byte)(endKey[endKey.length - 1] + 1);
         
         // Scan and delete all entries with this prefix
         Iterator<KVTNative.KVTPair> pairs = 
