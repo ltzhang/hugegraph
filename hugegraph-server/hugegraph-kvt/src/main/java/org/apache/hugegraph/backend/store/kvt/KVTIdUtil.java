@@ -24,6 +24,7 @@ import org.apache.hugegraph.backend.id.Id;
 import org.apache.hugegraph.backend.id.IdGenerator;
 import org.apache.hugegraph.backend.id.EdgeId;
 import org.apache.hugegraph.type.HugeType;
+import org.apache.hugegraph.type.define.Directions;
 import org.apache.hugegraph.util.E;
 import org.apache.hugegraph.util.NumericUtil;
 
@@ -105,6 +106,7 @@ public class KVTIdUtil {
         E.checkNotNull(edgeId, "edgeId");
         
         // EdgeId contains: ownerVertexId, direction, labelId, sortKeys, otherVertexId
+        // We need to ensure vertex labels are resolvable
         ByteBuffer buffer = ByteBuffer.allocate(1024); // Initial size
         
         // Write owner vertex ID
@@ -135,11 +137,70 @@ public class KVTIdUtil {
         buffer.putInt(otherBytes.length);
         buffer.put(otherBytes);
         
+        // Note: Vertex labels are not part of EdgeId structure
+        // They need to be resolved separately from vertex data
+        // The "~undefined" error occurs when HugeGraph can't resolve them
+        // Solution: Ensure vertices are properly loaded with labels before edge queries
+        
         // Return only the used portion
         buffer.flip();
         byte[] result = new byte[buffer.remaining()];
         buffer.get(result);
         return result;
+    }
+    
+    /**
+     * Parse an EdgeId from bytes
+     */
+    public static EdgeId bytesToEdgeId(byte[] bytes) {
+        E.checkNotNull(bytes, "bytes");
+        E.checkArgument(bytes.length > 0, "Empty byte array");
+        
+        ByteBuffer buffer = ByteBuffer.wrap(bytes);
+        
+        // Skip type prefix if present
+        if (bytes[0] == PREFIX_EDGE_OUT || bytes[0] == PREFIX_EDGE_IN) {
+            buffer.get(); // Skip prefix
+        }
+        
+        try {
+            // Read owner vertex ID
+            int ownerLen = buffer.getInt();
+            byte[] ownerBytes = new byte[ownerLen];
+            buffer.get(ownerBytes);
+            Id ownerId = IdGenerator.of(ownerBytes);
+            
+            // Read direction
+            byte dirCode = buffer.get();
+            
+            // Read label ID
+            int labelLen = buffer.getInt();
+            byte[] labelBytes = new byte[labelLen];
+            buffer.get(labelBytes);
+            Id labelId = IdGenerator.of(labelBytes);
+            
+            // Read sort values
+            int sortLen = buffer.getInt();
+            String sortValues = null;
+            if (sortLen > 0) {
+                byte[] sortBytes = new byte[sortLen];
+                buffer.get(sortBytes);
+                sortValues = new String(sortBytes);
+            }
+            
+            // Read other vertex ID
+            int otherLen = buffer.getInt();
+            byte[] otherBytes = new byte[otherLen];
+            buffer.get(otherBytes);
+            Id otherId = IdGenerator.of(otherBytes);
+            
+            // Create EdgeId
+            // Note: EdgeId constructor needs subLabelId parameter
+            // For now, use the same labelId for both parent and sub label
+            return new EdgeId(ownerId, Directions.OUT, labelId, labelId, sortValues, otherId);
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Failed to parse EdgeId from bytes", e);
+        }
     }
     
     /**

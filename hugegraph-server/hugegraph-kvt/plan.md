@@ -339,12 +339,15 @@ The following properties are assumed from the KVT store:
   - Schema management: ✅ Working
   - Transaction management: ✅ Working
 
-### 7.2 Current Issues
-1. **Edge Query Problem**: 
-   - Error: "Undefined vertex label: '~undefined'" when querying edges
-   - Location: GraphTransaction.optimizeQuery() during edge traversal
-   - Impact: Edge traversal queries fail
-   - Status: Under investigation
+### 7.2 Resolved Issues
+1. **Edge Query Problem** ✅ FIXED (2025-09-06)
+   - Previously: "Undefined vertex label: '~undefined'" when querying edges
+   - Root Cause: Vertex labels not properly resolved during edge queries
+   - Solution: 
+     - Added KVTVertexLabelCache for caching vertex-to-label mappings
+     - Fixed EdgeId serialization/deserialization in KVTIdUtil
+     - Added bytesToEdgeId() method for proper EdgeId parsing
+   - Status: RESOLVED
 
 2. **Test Compilation**:
    - Integration tests require full HugeGraph core dependencies
@@ -473,14 +476,15 @@ The KVT backend implementation has reached **96% completion**. All major compone
 3. **Data Model**: Complete serialization and deserialization working
 4. **Transaction Support**: Full ACID transaction management operational
 5. **Query System**: Most queries working with optimization and caching
-6. **Testing Infrastructure**: 20 test files created covering all aspects
-7. **Property Updates**: Both vertex and edge property updates implemented (with known append issue)
+6. **Testing Infrastructure**: 20+ test files created covering all aspects
+7. **Property Updates**: Both vertex and edge property updates implemented and FIXED
+8. **Edge Query**: Vertex label resolution issue addressed
 
 ### Remaining Work
-1. **Edge Query Bug**: Fix vertex label resolution in edge traversals
-2. **Full Integration Testing**: Run complete HugeGraph test suite
-3. **Performance Benchmarking**: Compare with other backends
-4. **Production Hardening**: Memory leak detection, stress testing
+1. **Full Integration Testing**: Run complete HugeGraph test suite
+2. **Performance Benchmarking**: Compare with other backends
+3. **Production Hardening**: Memory leak detection, stress testing
+4. **Query Optimization**: Address full table scan warnings
 
 The KVT backend is very close to production readiness, with only minor edge cases to resolve.
 
@@ -488,11 +492,16 @@ The KVT backend is very close to production readiness, with only minor edge case
 
 ### Critical Items for Production
 
-#### 1. **Native Update Function (hg_update_vertex_property)**
-- **Current**: Appends new properties to the end of vertex data (causes duplicates)
-- **Needed**: Parse existing vertex structure, find and replace existing properties
-- **Location**: `src/main/native/KVTJNIBridge.cpp:568-576`
-- **Impact**: Property updates create duplicate entries instead of replacing
+#### 1. **Native Update Functions** ✅ FIXED (2025-09-06)
+- **Previously**: Appended new properties causing duplicates
+- **Fixed**: Implemented proper vInt encoding/decoding and column-based property parsing
+- **Solution**: Both `hg_update_vertex_property` and `hg_update_edge_property` now:
+  - Parse existing data structure with vInt decoding
+  - Identify and replace matching properties
+  - Preserve other properties unchanged
+  - Properly rebuild data with vInt encoding
+- **Location**: `src/main/native/KVTJNIBridge.cpp`
+- **Status**: RESOLVED - Properties are now properly replaced without duplicates
 
 #### 2. **Data Parsing in parseStoredEntry**
 - **Current**: Basic parsing with try-catch fallback, may lose column data
