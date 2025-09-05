@@ -49,13 +49,20 @@ public class KVTNative {
         KEY_NOT_FOUND(7),
         KEY_IS_DELETED(8),
         KEY_IS_LOCKED(9),
-        TRANSACTION_HAS_STALE_DATA(10),
-        ONE_SHOT_WRITE_NOT_ALLOWED(11),
-        ONE_SHOT_DELETE_NOT_ALLOWED(12),
-        BATCH_NOT_FULLY_SUCCESS(13),
-        SCAN_LIMIT_REACHED(14),  // Not an error, just informational
-        EXT_FUNC_ERROR(15),
-        UNKNOWN_ERROR(16);
+        KEY_VERSION_MISMATCH(10),
+        WRITE_CONFLICT(11),
+        DELETE_CONFLICT(12),
+        UPDATE_CONFLICT(13),
+        RANGE_UPDATE_CONFLICT(14),
+        RANGE_DELETE_CONFLICT(15),
+        RANGE_INSERT_CONFLICT(16),
+        TRANSACTION_HAS_STALE_DATA(17),
+        ONE_SHOT_WRITE_NOT_ALLOWED(18),
+        ONE_SHOT_DELETE_NOT_ALLOWED(19),
+        BATCH_NOT_FULLY_SUCCESS(20),
+        EXT_FUNC_ERROR(21),
+        SCAN_LIMIT_REACHED(22),  // Not an error, just informational
+        UNKNOWN_ERROR(23);
 
         private final int code;
 

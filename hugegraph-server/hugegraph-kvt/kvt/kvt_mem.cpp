@@ -23,8 +23,8 @@ KVTError kvt_initialize() {
     try {
         //g_kvt_manager = std::make_unique<KVTMemManagerNoCC>(); // Create simple wrapper
         //g_kvt_manager = std::make_unique<KVTMemManagerSimple>(); // Create simple wrapper
-        //g_kvt_manager = std::make_unique<KVTMemManager2PL>(); // Create simple wrapper
-        g_kvt_manager = std::make_unique<KVTMemManagerOCC>(); // Create simple wrapper
+        g_kvt_manager = std::make_unique<KVTMemManager2PL>(); // Create 2PL wrapper - more stable
+        //g_kvt_manager = std::make_unique<KVTMemManagerOCC>(); // OCC has issues with table ID 0
         return KVTError::SUCCESS;
     } catch (const std::exception& e) {
         return KVTError::UNKNOWN_ERROR;

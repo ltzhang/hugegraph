@@ -313,8 +313,13 @@ JNIEXPORT jobjectArray JNICALL Java_org_apache_hugegraph_backend_store_kvt_KVTNa
     KVTKey keyEndKey;
     
     if (keyStart == nullptr) {
-        // For start of full table scan, use empty string (smallest possible)
-        keyStartKey = KVTKey("");
+        // For start of full table scan, use a very small key value
+        // Empty string doesn't work with lower_bound in the KVT implementation
+        // Use a single null byte which should be smaller than any normal key
+        keyStartKey = KVTKey(std::string(1, '\0'));
+    } else if (env->GetArrayLength(keyStart) == 0) {
+        // Empty byte array also means scan from beginning
+        keyStartKey = KVTKey(std::string(1, '\0'));
     } else {
         std::string keyStartStr = ByteArrayToString(env, keyStart);
         keyStartKey = KVTKey(keyStartStr);
@@ -351,10 +356,15 @@ JNIEXPORT jobjectArray JNICALL Java_org_apache_hugegraph_backend_store_kvt_KVTNa
     jobjectArray values = env->NewObjectArray(static_cast<jsize>(results.size()), byteArrayClass, nullptr);
     
     for (size_t i = 0; i < results.size(); ++i) {
-        env->SetObjectArrayElement(keys, static_cast<jsize>(i), 
-                                  StringToByteArray(env, results[i].first));
-        env->SetObjectArrayElement(values, static_cast<jsize>(i), 
-                                  StringToByteArray(env, results[i].second));
+        jbyteArray keyArray = StringToByteArray(env, results[i].first);
+        jbyteArray valueArray = StringToByteArray(env, results[i].second);
+        
+        env->SetObjectArrayElement(keys, static_cast<jsize>(i), keyArray);
+        env->SetObjectArrayElement(values, static_cast<jsize>(i), valueArray);
+        
+        // Delete local references to prevent memory leak in large result sets
+        env->DeleteLocalRef(keyArray);
+        env->DeleteLocalRef(valueArray);
     }
     
     env->SetObjectArrayElement(result, 0, errorCode);
@@ -506,8 +516,9 @@ JNIEXPORT jobjectArray JNICALL Java_org_apache_hugegraph_backend_store_kvt_KVTNa
         
         // For GET operations, include the value if successful
         if (batchOps[i].op == OP_GET && batchResults[i].error == KVTError::SUCCESS) {
-            env->SetObjectArrayElement(resultValues, static_cast<jsize>(i), 
-                                      StringToByteArray(env, batchResults[i].value));
+            jbyteArray valueArray = StringToByteArray(env, batchResults[i].value);
+            env->SetObjectArrayElement(resultValues, static_cast<jsize>(i), valueArray);
+            env->DeleteLocalRef(valueArray);
         }
     }
     env->ReleaseIntArrayElements(resultCodes, resultCodesArray, 0);
