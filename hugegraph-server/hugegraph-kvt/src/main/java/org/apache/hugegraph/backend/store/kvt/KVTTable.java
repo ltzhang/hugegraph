@@ -29,6 +29,7 @@ import org.apache.hugegraph.backend.query.ConditionQuery;
 import org.apache.hugegraph.backend.query.IdQuery;
 import org.apache.hugegraph.backend.query.Query;
 import org.apache.hugegraph.backend.serializer.BinaryBackendEntry;
+import org.apache.hugegraph.backend.serializer.BinaryBackendEntry.BinaryId;
 import org.apache.hugegraph.backend.serializer.BinarySerializer;
 import org.apache.hugegraph.backend.serializer.BytesBuffer;
 import org.apache.hugegraph.backend.store.BackendEntry;
@@ -150,13 +151,32 @@ public class KVTTable extends BackendTable<KVTSession, BackendEntry> {
     public void insert(KVTSession session, BackendEntry entry) {
         byte[] key = KVTIdUtil.idToBytes(this.type, entry.id());
         
-        // Serialize the entry's columns to bytes
-        BytesBuffer buffer = BytesBuffer.allocate(0);
-        for (BackendEntry.BackendColumn column : entry.columns()) {
-            buffer.write(column.name);
-            buffer.write(column.value);
+        // For BinaryBackendEntry, we can get the full serialized form
+        byte[] value;
+        if (entry instanceof BinaryBackendEntry) {
+            // Get the complete serialized entry
+            BinaryBackendEntry bEntry = (BinaryBackendEntry) entry;
+            BytesBuffer buffer = BytesBuffer.allocate(0);
+            
+            // Write ID in the proper BinaryBackendEntry format
+            BinaryId bid = bEntry.id();
+            buffer.write(bid.asBytes());
+            
+            // Write columns
+            for (BackendEntry.BackendColumn column : bEntry.columns()) {
+                buffer.write(column.name);
+                buffer.write(column.value);
+            }
+            value = buffer.bytes();
+        } else {
+            // For other entries, just serialize the columns
+            BytesBuffer buffer = BytesBuffer.allocate(0);
+            for (BackendEntry.BackendColumn column : entry.columns()) {
+                buffer.write(column.name);
+                buffer.write(column.value);
+            }
+            value = buffer.bytes();
         }
-        byte[] value = buffer.bytes();
         
         session.set(this.tableId, key, value);
         
@@ -265,6 +285,7 @@ public class KVTTable extends BackendTable<KVTSession, BackendEntry> {
             byte[] value = session.get(this.tableId, key);
             
             if (value != null) {
+                // Value already contains the complete entry with ID and columns
                 BinaryBackendEntry entry = new BinaryBackendEntry(this.type, value);
                 entries.add(entry);
             }
@@ -298,6 +319,7 @@ public class KVTTable extends BackendTable<KVTSession, BackendEntry> {
             session.scan(this.tableId, range.startKey, range.endKey, limit);
         
         Iterator<BackendEntry> entries = new MapperIterator<>(pairs, pair -> {
+            // Value already contains the complete entry with ID and columns
             return new BinaryBackendEntry(this.type, pair.value);
         });
         
@@ -320,6 +342,7 @@ public class KVTTable extends BackendTable<KVTSession, BackendEntry> {
             session.scan(this.tableId, startKey, endKey, limit);
         
         return new MapperIterator<>(pairs, pair -> {
+            // Value already contains the complete entry with ID and columns
             return new BinaryBackendEntry(this.type, pair.value);
         });
     }

@@ -160,15 +160,25 @@ public class KVTSession extends BackendSession.AbstractBackendSession {
      * Get a value from KVT
      */
     public byte[] get(long tableId, byte[] key) {
+        // Debug logging
+        System.out.println("[KVT-DEBUG] GET operation:");
+        System.out.println("  - Table ID: " + tableId);
+        System.out.println("  - Key (hex): " + bytesToHex(key));
+        System.out.println("  - Key (string): " + tryAsString(key));
+        
         KVTNative.KVTResult<byte[]> result = 
             KVTNative.get(this.transactionId, tableId, key);
         
         if (result.error == KVTNative.KVTError.KEY_NOT_FOUND) {
+            System.out.println("  - Result: KEY_NOT_FOUND");
             return null;
         } else if (result.error != KVTNative.KVTError.SUCCESS) {
             throw new BackendException("Failed to get key: %s", 
                                      result.errorMessage);
         }
+        
+        System.out.println("  - Value found, length: " + result.value.length + " bytes");
+        System.out.println("  - Value first 50 bytes (hex): " + bytesToHex(result.value, 50));
         
         return result.value;
     }
@@ -179,6 +189,14 @@ public class KVTSession extends BackendSession.AbstractBackendSession {
     public void set(long tableId, byte[] key, byte[] value) {
         E.checkNotNull(key, "key");
         E.checkNotNull(value, "value");
+        
+        // Debug logging
+        System.out.println("[KVT-DEBUG] SET operation:");
+        System.out.println("  - Table ID: " + tableId);
+        System.out.println("  - Key (hex): " + bytesToHex(key));
+        System.out.println("  - Key (string): " + tryAsString(key));
+        System.out.println("  - Value length: " + value.length + " bytes");
+        System.out.println("  - Value first 50 bytes (hex): " + bytesToHex(value, 50));
         
         KVTNative.KVTResult<Void> result = 
             KVTNative.set(this.transactionId, tableId, key, value);
@@ -269,5 +287,35 @@ public class KVTSession extends BackendSession.AbstractBackendSession {
     @FunctionalInterface
     public interface KVTOperation<T> {
         T execute(long transactionId);
+    }
+    
+    // Helper methods for debugging
+    private static String bytesToHex(byte[] bytes) {
+        return bytesToHex(bytes, bytes.length);
+    }
+    
+    private static String bytesToHex(byte[] bytes, int maxLen) {
+        if (bytes == null) return "null";
+        StringBuilder sb = new StringBuilder();
+        int len = Math.min(bytes.length, maxLen);
+        for (int i = 0; i < len; i++) {
+            sb.append(String.format("%02X", bytes[i]));
+            if (i < len - 1) sb.append(" ");
+        }
+        if (bytes.length > maxLen) {
+            sb.append("...");
+        }
+        return sb.toString();
+    }
+    
+    private static String tryAsString(byte[] bytes) {
+        if (bytes == null) return "null";
+        try {
+            String str = new String(bytes, "UTF-8");
+            // Replace non-printable chars
+            return str.replaceAll("[\\p{Cntrl}]", "?");
+        } catch (Exception e) {
+            return "<not a string>";
+        }
     }
 }
