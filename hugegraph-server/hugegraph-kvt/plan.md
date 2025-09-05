@@ -333,21 +333,38 @@ The following properties are assumed from the KVT store:
 - [x] Basic connectivity tests (TestKVTLibrary, TestKVTConnectivity) - **PASSING**
 - [x] Simple KVT operations (SimpleKVTTest) - **PASSING** 
 - [x] Native library loading and JNI bridge - **WORKING**
+- [x] Property update operations (TestVertexPropertyUpdate) - **PASSING**
+- [ ] Scan operations - **PARTIALLY WORKING**
+  - Basic scans with defined bounds: ✅ Working
+  - Full table scans (null bounds): ⚠️ Returns 0 results
+  - Stress test scans: ❌ Still failing with UNKNOWN_ERROR
 - [ ] HugeGraph integration tests - **PARTIALLY WORKING**
   - Vertex operations: ✅ Working
-  - Edge operations: ⚠️ Issue with vertex label lookup
+  - Edge operations: ✅ Fixed (edge deletion query resolved)
   - Schema management: ✅ Working
   - Transaction management: ✅ Working
 
-### 7.2 Resolved Issues
-1. **Edge Query Problem** ✅ FIXED (2025-09-06)
-   - Previously: "Undefined vertex label: '~undefined'" when querying edges
-   - Root Cause: Vertex labels not properly resolved during edge queries
-   - Solution: 
-     - Added KVTVertexLabelCache for caching vertex-to-label mappings
-     - Fixed EdgeId serialization/deserialization in KVTIdUtil
-     - Added bytesToEdgeId() method for proper EdgeId parsing
-   - Status: RESOLVED
+### 7.2 Resolved Issues (2025-09-06)
+
+1. **Variable Integer Encoding** ✅ FIXED
+   - Previously: Incorrect vInt encoding/decoding causing failures for values > 127 bytes
+   - Solution: Implemented proper vInt encoding matching HugeGraph's BytesBuffer format
+   - Now handles values up to 2^28 (~268M) with 1-4 byte encoding
+
+2. **Data Parsing in parseStoredEntry** ✅ FIXED
+   - Previously: Used buffer.parseId() which expected wrong format, causing parsing failures
+   - Solution: Skip ID bytes at beginning, parse columns with proper vInt length prefixes
+   - Added error recovery and edge case handling
+
+3. **Edge Query Problem** ✅ FIXED
+   - Previously: "Undefined property key: 'inV'" error in edge deletion queries
+   - Solution: Changed from property-based query to stream-based filtering
+   - Edge deletion now works correctly
+
+4. **Full Table Scan** ⚠️ PARTIALLY FIXED
+   - Previously: Error 22 (UNKNOWN_ERROR) with null parameters
+   - Solution: Use empty string for start and high-value string for end
+   - Now returns SUCCESS but 0 results (needs investigation)
 
 2. **Test Compilation**:
    - Integration tests require full HugeGraph core dependencies

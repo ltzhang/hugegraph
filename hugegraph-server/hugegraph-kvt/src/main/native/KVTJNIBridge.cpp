@@ -20,6 +20,7 @@
 #include <vector>
 #include <cstring>
 #include <stdexcept>
+#include <iostream>
 #include "org_apache_hugegraph_backend_store_kvt_KVTNative.h"
 #include "../../../kvt/kvt_inc.h"
 
@@ -312,14 +313,17 @@ JNIEXPORT jobjectArray JNICALL Java_org_apache_hugegraph_backend_store_kvt_KVTNa
     KVTKey keyEndKey;
     
     if (keyStart == nullptr) {
-        keyStartKey = KVTKey::minimum_key();  // Use minimum key for full table scan
+        // For start of full table scan, use empty string (smallest possible)
+        keyStartKey = KVTKey("");
     } else {
         std::string keyStartStr = ByteArrayToString(env, keyStart);
         keyStartKey = KVTKey(keyStartStr);
     }
     
     if (keyEnd == nullptr) {
-        keyEndKey = KVTKey::maximum_key();  // Use maximum key for full table scan
+        // For end of full table scan, use high value string
+        // Use string of 0xFF bytes which should be larger than any normal key
+        keyEndKey = KVTKey(std::string(100, '\xFF'));
     } else {
         std::string keyEndStr = ByteArrayToString(env, keyEnd);
         keyEndKey = KVTKey(keyEndStr);
