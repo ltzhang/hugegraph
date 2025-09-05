@@ -151,33 +151,32 @@ public class KVTTable extends BackendTable<KVTSession, BackendEntry> {
     public void insert(KVTSession session, BackendEntry entry) {
         byte[] key = KVTIdUtil.idToBytes(this.type, entry.id());
         
-        // For BinaryBackendEntry, we can get the full serialized form
-        byte[] value;
+        // Serialize the entry with ID and columns
+        BytesBuffer buffer = BytesBuffer.allocate(0);
+        
+        // Write ID in the proper BinaryBackendEntry format
         if (entry instanceof BinaryBackendEntry) {
-            // Get the complete serialized entry
             BinaryBackendEntry bEntry = (BinaryBackendEntry) entry;
-            BytesBuffer buffer = BytesBuffer.allocate(0);
-            
-            // Write ID in the proper BinaryBackendEntry format
             BinaryId bid = bEntry.id();
             buffer.write(bid.asBytes());
-            
-            // Write columns
-            for (BackendEntry.BackendColumn column : bEntry.columns()) {
-                buffer.write(column.name);
-                buffer.write(column.value);
-            }
-            value = buffer.bytes();
         } else {
-            // For other entries, just serialize the columns
-            BytesBuffer buffer = BytesBuffer.allocate(0);
-            for (BackendEntry.BackendColumn column : entry.columns()) {
-                buffer.write(column.name);
-                buffer.write(column.value);
-            }
-            value = buffer.bytes();
+            // For non-binary entries, convert ID to bytes
+            byte[] idBytes = KVTIdUtil.idToBytes(this.type, entry.id());
+            buffer.write(idBytes);
         }
         
+        // Write columns with length prefixes for proper parsing
+        for (BackendEntry.BackendColumn column : entry.columns()) {
+            // Write column name length and name
+            buffer.writeVInt(column.name.length);
+            buffer.write(column.name);
+            
+            // Write column value length and value
+            buffer.writeVInt(column.value.length);
+            buffer.write(column.value);
+        }
+        
+        byte[] value = buffer.bytes();
         session.set(this.tableId, key, value);
         
         // Invalidate cache for this table
@@ -206,9 +205,85 @@ public class KVTTable extends BackendTable<KVTSession, BackendEntry> {
      */
     @Override
     public void append(KVTSession session, BackendEntry entry) {
-        // For KVT, append is similar to insert (overwrites the value)
-        // In a real implementation, you might want to merge columns
-        this.insert(session, entry);
+        // Check if this is a property update (vertex or edge)
+        if (entry.subId() != null) {
+            if (entry.type() == HugeType.VERTEX) {
+                // This is a vertex property update
+                this.updateVertexProperty(session, entry);
+            } else if (entry.type() == HugeType.EDGE_OUT || 
+                       entry.type() == HugeType.EDGE_IN) {
+                // This is an edge property update
+                this.updateEdgeProperty(session, entry);
+            } else {
+                // For other cases with subId, use regular insert
+                this.insert(session, entry);
+            }
+        } else {
+            // For other cases, append is similar to insert
+            this.insert(session, entry);
+        }
+    }
+    
+    /**
+     * Update a vertex property using native atomic update
+     */
+    private void updateVertexProperty(KVTSession session, BackendEntry entry) {
+        byte[] key = KVTIdUtil.idToBytes(this.type, entry.id());
+        
+        // Serialize the property update data
+        BytesBuffer buffer = BytesBuffer.allocate(0);
+        
+        // Write property columns with length prefixes
+        for (BackendEntry.BackendColumn column : entry.columns()) {
+            buffer.writeVInt(column.name.length);
+            buffer.write(column.name);
+            buffer.writeVInt(column.value.length);
+            buffer.write(column.value);
+        }
+        
+        byte[] propertyUpdate = buffer.bytes();
+        
+        // Call native update
+        session.updateVertexProperty(this.tableId, key, propertyUpdate);
+        
+        // Invalidate cache for this table
+        if (this.cache != null) {
+            this.cache.invalidate(this.tableId);
+        }
+        
+        LOG.trace("Updated vertex property for key {} in table {}", 
+                 entry.id(), this.table());
+    }
+    
+    /**
+     * Update an edge property using native atomic update
+     */
+    private void updateEdgeProperty(KVTSession session, BackendEntry entry) {
+        byte[] key = KVTIdUtil.idToBytes(this.type, entry.id());
+        
+        // Serialize the property update data
+        BytesBuffer buffer = BytesBuffer.allocate(0);
+        
+        // Write property columns with length prefixes
+        for (BackendEntry.BackendColumn column : entry.columns()) {
+            buffer.writeVInt(column.name.length);
+            buffer.write(column.name);
+            buffer.writeVInt(column.value.length);
+            buffer.write(column.value);
+        }
+        
+        byte[] propertyUpdate = buffer.bytes();
+        
+        // Call native update
+        session.updateEdgeProperty(this.tableId, key, propertyUpdate);
+        
+        // Invalidate cache for this table
+        if (this.cache != null) {
+            this.cache.invalidate(this.tableId);
+        }
+        
+        LOG.trace("Updated edge property for key {} in table {}", 
+                 entry.id(), this.table());
     }
     
     /**
@@ -285,8 +360,8 @@ public class KVTTable extends BackendTable<KVTSession, BackendEntry> {
             byte[] value = session.get(this.tableId, key);
             
             if (value != null) {
-                // Value already contains the complete entry with ID and columns
-                BinaryBackendEntry entry = new BinaryBackendEntry(this.type, value);
+                // Parse the stored value to reconstruct the entry
+                BinaryBackendEntry entry = parseStoredEntry(id, value);
                 entries.add(entry);
             }
         }
@@ -319,8 +394,9 @@ public class KVTTable extends BackendTable<KVTSession, BackendEntry> {
             session.scan(this.tableId, range.startKey, range.endKey, limit);
         
         Iterator<BackendEntry> entries = new MapperIterator<>(pairs, pair -> {
-            // Value already contains the complete entry with ID and columns
-            return new BinaryBackendEntry(this.type, pair.value);
+            // Parse the stored value to reconstruct the entry
+            Id id = KVTIdUtil.bytesToId(pair.key);
+            return parseStoredEntry(id, pair.value);
         });
         
         // Apply filter conditions if any
@@ -342,9 +418,61 @@ public class KVTTable extends BackendTable<KVTSession, BackendEntry> {
             session.scan(this.tableId, startKey, endKey, limit);
         
         return new MapperIterator<>(pairs, pair -> {
-            // Value already contains the complete entry with ID and columns
-            return new BinaryBackendEntry(this.type, pair.value);
+            // Parse the stored value to reconstruct the entry  
+            Id id = KVTIdUtil.bytesToId(pair.key);
+            return parseStoredEntry(id, pair.value);
         });
+    }
+    
+    /**
+     * Parse a stored entry from its serialized form
+     */
+    private BinaryBackendEntry parseStoredEntry(Id id, byte[] value) {
+        try {
+            BytesBuffer buffer = BytesBuffer.wrap(value);
+            
+            // Parse the ID from the stored value
+            BinaryId bid = buffer.parseId(this.type, false);
+            
+            // Create the entry with the parsed ID
+            BinaryBackendEntry entry = new BinaryBackendEntry(this.type, bid);
+            
+            // Parse and add columns from the remaining buffer
+            // The value format is: [id_bytes][column1_name_len][column1_name][column1_value_len][column1_value]...
+            
+            // Now parse the columns from the remaining buffer
+            while (buffer.remaining() > 0) {
+                try {
+                    // Read column name length and name
+                    int nameLen = buffer.readVInt();
+                    if (nameLen <= 0 || nameLen > buffer.remaining()) {
+                        break;
+                    }
+                    byte[] name = buffer.read(nameLen);
+                    
+                    // Read column value length and value
+                    if (buffer.remaining() < 1) {
+                        break;
+                    }
+                    int valueLen = buffer.readVInt();
+                    if (valueLen < 0 || valueLen > buffer.remaining()) {
+                        break;
+                    }
+                    byte[] colValue = valueLen > 0 ? buffer.read(valueLen) : BytesBuffer.BYTES_EMPTY;
+                    
+                    entry.column(name, colValue);
+                } catch (Exception e) {
+                    // End of buffer or malformed data, stop parsing
+                    break;
+                }
+            }
+            
+            return entry;
+        } catch (Exception e) {
+            // If parsing fails, try creating entry with just the ID
+            LOG.warn("Failed to parse stored entry, creating with ID only", e);
+            return new BinaryBackendEntry(this.type, (BinaryId) id);
+        }
     }
     
     @Override

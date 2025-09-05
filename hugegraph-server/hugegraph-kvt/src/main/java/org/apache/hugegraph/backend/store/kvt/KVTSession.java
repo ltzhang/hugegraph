@@ -224,6 +224,38 @@ public class KVTSession extends BackendSession.AbstractBackendSession {
     }
     
     /**
+     * Update a vertex property atomically
+     */
+    public void updateVertexProperty(long tableId, byte[] key, byte[] propertyUpdate) {
+        E.checkNotNull(key, "key");
+        E.checkNotNull(propertyUpdate, "propertyUpdate");
+        
+        KVTNative.KVTResult<byte[]> result = 
+            KVTNative.updateVertexProperty(this.transactionId, tableId, key, propertyUpdate);
+        
+        if (result.error != KVTNative.KVTError.SUCCESS) {
+            throw new BackendException("Failed to update vertex property: %s", 
+                                     result.errorMessage);
+        }
+    }
+    
+    /**
+     * Update an edge property atomically
+     */
+    public void updateEdgeProperty(long tableId, byte[] key, byte[] propertyUpdate) {
+        E.checkNotNull(key, "key");
+        E.checkNotNull(propertyUpdate, "propertyUpdate");
+        
+        KVTNative.KVTResult<byte[]> result = 
+            KVTNative.updateEdgeProperty(this.transactionId, tableId, key, propertyUpdate);
+        
+        if (result.error != KVTNative.KVTError.SUCCESS) {
+            throw new BackendException("Failed to update edge property: %s", 
+                                     result.errorMessage);
+        }
+    }
+    
+    /**
      * Scan a range of keys
      */
     public Iterator<KVTNative.KVTPair> scan(long tableId, 

@@ -31,7 +31,6 @@
     RANGE_UPDATE_CONFLICT,                 // Range update conflict
     RANGE_DELETE_CONFLICT,                 // Range delete conflict
     RANGE_INSERT_CONFLICT,                 // Range insert conflict
-    RANGE_UPDATE_CONFLICT,                 // Range update conflict
     TRANSACTION_HAS_STALE_DATA,            // OCC validation failed due to concurrent modifications
     ONE_SHOT_WRITE_NOT_ALLOWED,            // Write operations require an active transaction
     ONE_SHOT_DELETE_NOT_ALLOWED,           // Delete operations require an active transaction

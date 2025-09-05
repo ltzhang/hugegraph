@@ -266,6 +266,28 @@ public class KVTNative {
                                                     long[] tableIds, byte[][] keys, byte[][] values);
 
     /**
+     * Update a vertex property atomically.
+     * @param txId Transaction ID (0 for auto-commit)
+     * @param tableId Table ID
+     * @param key Vertex key
+     * @param propertyUpdate Serialized property update data
+     * @return Array with [errorCode, resultValue, errorMessage]
+     */
+    public static native Object[] nativeVertexPropertyUpdate(long txId, long tableId, 
+                                                            byte[] key, byte[] propertyUpdate);
+
+    /**
+     * Update an edge property atomically.
+     * @param txId Transaction ID (0 for auto-commit)
+     * @param tableId Table ID
+     * @param key Edge key
+     * @param propertyUpdate Serialized property update data
+     * @return Array with [errorCode, resultValue, errorMessage]
+     */
+    public static native Object[] nativeEdgePropertyUpdate(long txId, long tableId,
+                                                           byte[] key, byte[] propertyUpdate);
+
+    /**
      * Commit a transaction.
      * @param txId Transaction ID
      * @return Array with [errorCode, errorMessage]
@@ -452,6 +474,26 @@ public class KVTNative {
         }
         
         return new KVTResult<>(error, results, "");
+    }
+    
+    public static KVTResult<byte[]> updateVertexProperty(long txId, long tableId, 
+                                                         byte[] key, byte[] propertyUpdate) {
+        Object[] result = nativeVertexPropertyUpdate(txId, tableId, key, propertyUpdate);
+        Integer errorCode = (Integer) result[0];
+        byte[] resultValue = (byte[]) result[1];
+        String errorMsg = result[2] != null ? result[2].toString() : "";
+        KVTError error = KVTError.fromCode(errorCode);
+        return new KVTResult<>(error, resultValue, errorMsg);
+    }
+    
+    public static KVTResult<byte[]> updateEdgeProperty(long txId, long tableId,
+                                                       byte[] key, byte[] propertyUpdate) {
+        Object[] result = nativeEdgePropertyUpdate(txId, tableId, key, propertyUpdate);
+        Integer errorCode = (Integer) result[0];
+        byte[] resultValue = (byte[]) result[1];
+        String errorMsg = result[2] != null ? result[2].toString() : "";
+        KVTError error = KVTError.fromCode(errorCode);
+        return new KVTResult<>(error, resultValue, errorMsg);
     }
     
 }

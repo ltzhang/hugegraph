@@ -276,8 +276,29 @@ gdb java
 
 Note: These limitations apply only to the kvt_memory.o test implementation. Production KVT implementations should provide full durability, scalability, and distributed capabilities as specified in the interface requirements.
 
+## ⚠️ CRITICAL: Production Readiness Checklist
+
+**WARNING**: The current implementation contains shortcuts that MUST be fixed before production use:
+
+### Must Fix Before Production:
+1. **Property Updates**: `hg_update_vertex_property` appends instead of replacing (causes data corruption)
+2. **Variable Integer Encoding**: Limited to 127 bytes (will crash on larger properties)
+3. **Memory Leaks**: JNI local references not cleaned up in loops
+4. **Data Loss**: `parseStoredEntry` error handling may lose column data
+5. **Query Performance**: Many operations trigger full table scans
+
+### Required KVT Implementation Properties:
+- **ACID Transactions**: Full isolation and atomicity
+- **Durability**: Data persistence and crash recovery
+- **Scalability**: Handle millions of key-value pairs
+- **Concurrency**: Support multiple concurrent transactions
+- **Performance**: Sub-millisecond reads for small values
+
+See `plan.md` Phase 8 for complete list of TODOs and technical details.
+
 ## Contributing
 Please follow the HugeGraph contribution guidelines when submitting patches or features for the KVT backend.
+**IMPORTANT**: Any PR must address the production readiness issues listed above.
 
 ## License
 The KVT backend follows the same Apache 2.0 license as HugeGraph.

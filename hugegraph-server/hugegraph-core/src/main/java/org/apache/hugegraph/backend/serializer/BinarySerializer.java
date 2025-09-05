@@ -465,7 +465,26 @@ public class BinarySerializer extends AbstractSerializer {
 
     @Override
     public BackendEntry writeVertexProperty(HugeVertexProperty<?> prop) {
-        throw new NotImplementedException("Unsupported writeVertexProperty()");
+        HugeVertex vertex = prop.element();
+        BinaryBackendEntry entry = newBackendEntry(HugeType.VERTEX, vertex.id());
+        
+        // Set subId to indicate this is a property update
+        entry.subId(IdGenerator.of(prop.key()));
+        
+        // Format the property update
+        BytesBuffer buffer = BytesBuffer.allocate(64);
+        // Write property key ID
+        buffer.writeId(prop.propertyKey().id());
+        // Write property value
+        buffer.writeProperty(prop.propertyKey(), prop.value());
+        
+        // Write the property update as a column
+        // Use empty name for the column (vertex properties don't have column names in binary format)
+        byte[] name = this.keyWithIdPrefix ?
+                      entry.id().asBytes() : BytesBuffer.BYTES_EMPTY;
+        entry.column(name, buffer.bytes());
+        
+        return entry;
     }
 
     @Override
@@ -526,8 +545,26 @@ public class BinarySerializer extends AbstractSerializer {
 
     @Override
     public BackendEntry writeEdgeProperty(HugeEdgeProperty<?> prop) {
-        // TODO: entry.column(this.formatProperty(prop));
-        throw new NotImplementedException("Unsupported writeEdgeProperty()");
+        // Create minimal entry with property data for atomic update
+        HugeEdge edge = prop.element();
+        Id id = edge.id();
+        
+        // Write edge ID properly
+        Id edgeId = writeEdgeId(id);
+        HugeType type = edge.direction() == Directions.OUT ? 
+                        HugeType.EDGE_OUT : HugeType.EDGE_IN;
+        
+        BinaryBackendEntry entry = newBackendEntry(type, edgeId);
+        
+        // Set subId to mark this as a property update
+        entry.subId(IdGenerator.of(prop.key()));
+        
+        // Format the property update
+        BytesBuffer buffer = BytesBuffer.allocate(64);
+        buffer.writeProperty(prop.key(), prop.value());
+        entry.column(HugeKeys.PROPERTIES, buffer.bytes());
+        
+        return entry;
     }
 
     @Override

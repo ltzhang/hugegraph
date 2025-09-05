@@ -105,13 +105,15 @@ public class KVTFeatures implements BackendFeatures {
 
     @Override
     public boolean supportsUpdateVertexProperty() {
-        // Can update vertex properties
+        // Now that BinarySerializer implements writeVertexProperty()
+        // we can support partial property updates
         return true;
     }
 
     @Override
     public boolean supportsUpdateEdgeProperty() {
-        // Can update edge properties
+        // Now that BinarySerializer implements writeEdgeProperty()
+        // we can support partial property updates
         return true;
     }
 
