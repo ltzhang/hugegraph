@@ -431,47 +431,98 @@ public class KVTTable extends BackendTable<KVTSession, BackendEntry> {
         try {
             BytesBuffer buffer = BytesBuffer.wrap(value);
             
-            // Parse the ID from the stored value
-            BinaryId bid = buffer.parseId(this.type, false);
+            // The data format stored is: [id_bytes][columns...]
+            // The ID was already parsed from the key, so we need to skip the ID bytes in the value
             
-            // Create the entry with the parsed ID
-            BinaryBackendEntry entry = new BinaryBackendEntry(this.type, bid);
+            // Determine ID size to skip based on the type
+            int idBytesLength = 0;
+            if (id instanceof BinaryId) {
+                BinaryId bid = (BinaryId) id;
+                idBytesLength = bid.asBytes().length;
+            } else {
+                // For non-binary IDs, we need to determine the serialized size
+                // This depends on the HugeType and ID format
+                byte[] idBytes = KVTIdUtil.idToBytes(this.type, id);
+                idBytesLength = idBytes.length;
+            }
             
-            // Parse and add columns from the remaining buffer
-            // The value format is: [id_bytes][column1_name_len][column1_name][column1_value_len][column1_value]...
+            // Skip the ID bytes that are at the beginning of the value
+            if (idBytesLength > 0 && buffer.remaining() >= idBytesLength) {
+                buffer.read(idBytesLength);
+            }
             
-            // Now parse the columns from the remaining buffer
+            // Create the entry with the known ID
+            BinaryBackendEntry entry;
+            if (id instanceof BinaryId) {
+                entry = new BinaryBackendEntry(this.type, (BinaryId) id);
+            } else {
+                // Convert the ID to BinaryId format for the entry
+                byte[] idBytes = KVTIdUtil.idToBytes(this.type, id);
+                BinaryId bid = new BinaryId(idBytes, id);
+                entry = new BinaryBackendEntry(this.type, bid);
+            }
+            
+            // Parse columns: [name_len_vInt][name][value_len_vInt][value]...
             while (buffer.remaining() > 0) {
                 try {
-                    // Read column name length and name
+                    // Read column name length as vInt
                     int nameLen = buffer.readVInt();
                     if (nameLen <= 0 || nameLen > buffer.remaining()) {
+                        // Invalid name length, stop parsing
+                        LOG.debug("Invalid column name length {} at position {}, stopping parse", 
+                                 nameLen, buffer.position());
                         break;
                     }
                     byte[] name = buffer.read(nameLen);
                     
-                    // Read column value length and value
+                    // Check if we have enough bytes for value length
                     if (buffer.remaining() < 1) {
+                        LOG.debug("No remaining bytes for value length at position {}", 
+                                 buffer.position());
                         break;
                     }
+                    
+                    // Read column value length as vInt
                     int valueLen = buffer.readVInt();
                     if (valueLen < 0 || valueLen > buffer.remaining()) {
+                        // Invalid value length, stop parsing
+                        LOG.debug("Invalid column value length {} at position {}, stopping parse", 
+                                 valueLen, buffer.position());
                         break;
                     }
+                    
+                    // Read the value (could be empty)
                     byte[] colValue = valueLen > 0 ? buffer.read(valueLen) : BytesBuffer.BYTES_EMPTY;
                     
+                    // Add the column to the entry
                     entry.column(name, colValue);
+                    
+                    LOG.trace("Parsed column: name_len={}, value_len={}", nameLen, valueLen);
+                    
                 } catch (Exception e) {
-                    // End of buffer or malformed data, stop parsing
+                    // Error parsing column, log and continue with what we have
+                    LOG.debug("Error parsing column at position {}: {}", 
+                             buffer.position(), e.getMessage());
                     break;
                 }
             }
             
+            LOG.trace("Parsed entry with {} columns", entry.columnsSize());
             return entry;
+            
         } catch (Exception e) {
-            // If parsing fails, try creating entry with just the ID
-            LOG.warn("Failed to parse stored entry, creating with ID only", e);
-            return new BinaryBackendEntry(this.type, (BinaryId) id);
+            // Critical parsing error, create minimal entry with just the ID
+            LOG.warn("Critical error parsing stored entry for ID {}: {}", id, e.getMessage());
+            
+            // Create a basic entry with just the ID
+            BinaryId bid;
+            if (id instanceof BinaryId) {
+                bid = (BinaryId) id;
+            } else {
+                byte[] idBytes = KVTIdUtil.idToBytes(this.type, id);
+                bid = new BinaryId(idBytes, id);
+            }
+            return new BinaryBackendEntry(this.type, bid);
         }
     }
     

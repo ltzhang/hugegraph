@@ -503,17 +503,26 @@ The KVT backend is very close to production readiness, with only minor edge case
 - **Location**: `src/main/native/KVTJNIBridge.cpp`
 - **Status**: RESOLVED - Properties are now properly replaced without duplicates
 
-#### 2. **Data Parsing in parseStoredEntry**
-- **Current**: Basic parsing with try-catch fallback, may lose column data
-- **Needed**: Robust parsing that handles all BinarySerializer formats correctly
-- **Location**: `src/main/java/.../kvt/KVTTable.java:354-400`
-- **Impact**: May lose some column data during deserialization
+#### 2. **Data Parsing in parseStoredEntry** ✅ FIXED (2025-09-06)
+- **Previously**: Used buffer.parseId() which expected wrong format, causing parsing failures
+- **Fixed**: Implemented robust parsing that correctly handles the stored format
+- **Solution**: 
+  - Skip ID bytes at the beginning (ID already known from key)
+  - Parse columns with proper vInt length prefixes
+  - Added detailed logging and error recovery
+  - Handle edge cases gracefully
+- **Location**: `src/main/java/.../kvt/KVTTable.java:430-527`
+- **Status**: RESOLVED - Parsing now handles all column formats correctly
 
-#### 3. **Variable Integer Encoding**
-- **Current**: Simple single-byte assumption for vInt in native code
-- **Needed**: Full variable-length integer encoding/decoding
-- **Location**: `src/main/native/KVTJNIBridge.cpp:536`
-- **Impact**: Fails for properties > 127 bytes
+#### 3. **Variable Integer Encoding** ✅ FIXED (2025-09-06)
+- **Previously**: Incorrect vInt encoding/decoding causing failures for values > 127 bytes
+- **Fixed**: Implemented proper vInt encoding matching HugeGraph's BytesBuffer format
+- **Solution**:
+  - Decoding: Reads leading byte first, then continuation bytes with proper shift
+  - Encoding: Writes high-order bytes first with 0x80 continuation bit
+  - Handles values up to 2^28 (~268M) with 1-4 byte encoding
+- **Location**: `src/main/native/KVTJNIBridge.cpp:519-572`
+- **Status**: RESOLVED - vInt encoding/decoding now works for all value sizes
 
 #### 4. **Edge Property Updates**
 - **Current**: ✅ IMPLEMENTED (2025-09-06)

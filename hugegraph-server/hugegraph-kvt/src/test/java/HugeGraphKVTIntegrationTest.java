@@ -5,6 +5,7 @@ import org.apache.hugegraph.schema.SchemaManager;
 import org.apache.hugegraph.structure.HugeVertex;
 import org.apache.tinkerpop.gremlin.structure.T;
 import org.apache.tinkerpop.gremlin.structure.Vertex;
+import org.apache.tinkerpop.gremlin.structure.Edge;
 
 import java.util.Iterator;
 
@@ -159,12 +160,15 @@ public class HugeGraphKVTIntegrationTest {
             
             // 11. Delete an edge
             System.out.println("\n11. Deleting edge...");
+            // Find all edges from Alice and delete the one to Bob
             graph.traversal()
                  .V("alice")
                  .outE("knows")
-                 .has("inV", graph.vertices("bob").next())
-                 .next()
-                 .remove();
+                 .toList()
+                 .stream()
+                 .filter(e -> e.inVertex().id().equals("bob"))
+                 .findFirst()
+                 .ifPresent(org.apache.tinkerpop.gremlin.structure.Element::remove);
             graph.tx().commit();
             System.out.println("   ✓ Deleted edge from Alice to Bob");
             

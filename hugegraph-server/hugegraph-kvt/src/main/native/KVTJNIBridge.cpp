@@ -240,12 +240,13 @@ JNIEXPORT jobjectArray JNICALL Java_org_apache_hugegraph_backend_store_kvt_KVTNa
 JNIEXPORT jobjectArray JNICALL Java_org_apache_hugegraph_backend_store_kvt_KVTNative_nativeGet
   (JNIEnv *env, jclass cls, jlong txId, jlong tableId, jbyteArray key) {
     std::string keyStr = ByteArrayToString(env, key);
+    KVTKey kvtKey(keyStr);
     std::string value;
     std::string errorMsg;
     
     KVTError error = kvt_get(static_cast<uint64_t>(txId), 
                             static_cast<uint64_t>(tableId),
-                            keyStr, value, errorMsg);
+                            kvtKey, value, errorMsg);
     
     jclass objectClass = env->FindClass("java/lang/Object");
     jobjectArray result = env->NewObjectArray(3, objectClass, nullptr);
@@ -269,12 +270,13 @@ JNIEXPORT jobjectArray JNICALL Java_org_apache_hugegraph_backend_store_kvt_KVTNa
 JNIEXPORT jobjectArray JNICALL Java_org_apache_hugegraph_backend_store_kvt_KVTNative_nativeSet
   (JNIEnv *env, jclass cls, jlong txId, jlong tableId, jbyteArray key, jbyteArray value) {
     std::string keyStr = ByteArrayToString(env, key);
+    KVTKey kvtKey(keyStr);
     std::string valueStr = ByteArrayToString(env, value);
     std::string errorMsg;
     
     KVTError error = kvt_set(static_cast<uint64_t>(txId),
                             static_cast<uint64_t>(tableId),
-                            keyStr, valueStr, errorMsg);
+                            kvtKey, valueStr, errorMsg);
     
     return CreateErrorResult(env, error, errorMsg);
 }
@@ -287,11 +289,12 @@ JNIEXPORT jobjectArray JNICALL Java_org_apache_hugegraph_backend_store_kvt_KVTNa
 JNIEXPORT jobjectArray JNICALL Java_org_apache_hugegraph_backend_store_kvt_KVTNative_nativeDel
   (JNIEnv *env, jclass cls, jlong txId, jlong tableId, jbyteArray key) {
     std::string keyStr = ByteArrayToString(env, key);
+    KVTKey kvtKey(keyStr);
     std::string errorMsg;
     
     KVTError error = kvt_del(static_cast<uint64_t>(txId),
                             static_cast<uint64_t>(tableId),
-                            keyStr, errorMsg);
+                            kvtKey, errorMsg);
     
     return CreateErrorResult(env, error, errorMsg);
 }
@@ -304,14 +307,30 @@ JNIEXPORT jobjectArray JNICALL Java_org_apache_hugegraph_backend_store_kvt_KVTNa
 JNIEXPORT jobjectArray JNICALL Java_org_apache_hugegraph_backend_store_kvt_KVTNative_nativeScan
   (JNIEnv *env, jclass cls, jlong txId, jlong tableId, 
    jbyteArray keyStart, jbyteArray keyEnd, jint limit) {
-    std::string keyStartStr = ByteArrayToString(env, keyStart);
-    std::string keyEndStr = ByteArrayToString(env, keyEnd);
-    std::vector<std::pair<std::string, std::string>> results;
+    // Handle null arrays for full table scan
+    KVTKey keyStartKey;
+    KVTKey keyEndKey;
+    
+    if (keyStart == nullptr) {
+        keyStartKey = KVTKey::minimum_key();  // Use minimum key for full table scan
+    } else {
+        std::string keyStartStr = ByteArrayToString(env, keyStart);
+        keyStartKey = KVTKey(keyStartStr);
+    }
+    
+    if (keyEnd == nullptr) {
+        keyEndKey = KVTKey::maximum_key();  // Use maximum key for full table scan
+    } else {
+        std::string keyEndStr = ByteArrayToString(env, keyEnd);
+        keyEndKey = KVTKey(keyEndStr);
+    }
+    
+    std::vector<std::pair<KVTKey, std::string>> results;
     std::string errorMsg;
     
     KVTError error = kvt_scan(static_cast<uint64_t>(txId),
                              static_cast<uint64_t>(tableId),
-                             keyStartStr, keyEndStr,
+                             keyStartKey, keyEndKey,
                              static_cast<size_t>(limit),
                              results, errorMsg);
     
@@ -499,49 +518,57 @@ JNIEXPORT jobjectArray JNICALL Java_org_apache_hugegraph_backend_store_kvt_KVTNa
 
 /**
  * Helper function to decode variable-length integer (vInt)
+ * Matches HugeGraph's BytesBuffer.readVInt() format
  */
 size_t decodeVInt(const unsigned char* data, size_t& bytes_read) {
-    size_t value = 0;
-    bytes_read = 0;
+    unsigned char leading = data[0];
+    size_t value = leading & 0x7F;
+    bytes_read = 1;
     
-    while (true) {
+    if ((leading & 0x80) == 0) {
+        // Single byte value
+        return value;
+    }
+    
+    // Multi-byte value - keep reading continuation bytes
+    for (int i = 1; i < 5; i++) {
         unsigned char b = data[bytes_read];
-        value = (value << 7) | (b & 0x7F);
         bytes_read++;
         
         if ((b & 0x80) == 0) {
-            break;
-        }
-        
-        if (bytes_read > 5) {  // Prevent infinite loops
-            throw std::runtime_error("Invalid vInt encoding");
+            // Final byte (no continuation bit)
+            value = (value << 7) | b;
+            return value;
+        } else {
+            // Continuation byte
+            value = (value << 7) | (b & 0x7F);
         }
     }
     
-    return value;
+    throw std::runtime_error("Invalid vInt encoding - too many bytes");
 }
 
 /**
  * Helper function to encode variable-length integer (vInt)
+ * Matches HugeGraph's BytesBuffer.writeVInt() format
  */
 void encodeVInt(size_t value, std::string& output) {
-    if (value < 128) {
-        output.push_back(static_cast<char>(value));
-        return;
-    }
+    // HugeGraph writes high-order bytes first with continuation bit
+    // Format: most significant bytes first, each with 0x80 bit set except the last
     
-    // For larger values, use multi-byte encoding
-    std::vector<unsigned char> bytes;
-    while (value > 127) {
-        bytes.push_back((value & 0x7F) | 0x80);
-        value >>= 7;
+    if (value > 0x0fffffff) {
+        output.push_back(0x80 | ((value >> 28) & 0x7f));
     }
-    bytes.push_back(value & 0x7F);
-    
-    // Write in reverse order
-    for (auto it = bytes.rbegin(); it != bytes.rend(); ++it) {
-        output.push_back(static_cast<char>(*it));
+    if (value > 0x1fffff) {
+        output.push_back(0x80 | ((value >> 21) & 0x7f));
     }
+    if (value > 0x3fff) {
+        output.push_back(0x80 | ((value >> 14) & 0x7f));
+    }
+    if (value > 0x7f) {
+        output.push_back(0x80 | ((value >> 7) & 0x7f));
+    }
+    output.push_back(value & 0x7f);
 }
 
 /*
@@ -556,7 +583,7 @@ void encodeVInt(size_t value, std::string& output) {
  * Column format: [name_len_vint][name_bytes][value_len_vint][value_bytes]
  */
 std::tuple<bool, bool, bool> hg_update_vertex_property(
-    const std::string& key,
+    const KVTKey& key,
     const std::string& original_value,
     const std::string& parameter,
     std::string& new_value,
@@ -710,10 +737,11 @@ extern "C" JNIEXPORT jobjectArray JNICALL Java_org_apache_hugegraph_backend_stor
     KVUpdateFunc updateFunc = hg_update_vertex_property;
     
     // Call kvt_update with our custom function
+    KVTKey kvtKey(keyStr);
     KVTError error = kvt_update(
         static_cast<uint64_t>(txId),
         static_cast<uint64_t>(tableId),
-        keyStr,
+        kvtKey,
         updateFunc,
         paramStr,
         resultValue,
@@ -744,7 +772,7 @@ extern "C" JNIEXPORT jobjectArray JNICALL Java_org_apache_hugegraph_backend_stor
  * - parameter: [property_key_len][property_key][property_value_len][property_value]
  */
 std::tuple<bool, bool, bool> hg_update_edge_property(
-    const std::string& key,
+    const KVTKey& key,
     const std::string& original_value,
     const std::string& parameter,
     std::string& new_value,
@@ -898,10 +926,11 @@ extern "C" JNIEXPORT jobjectArray JNICALL Java_org_apache_hugegraph_backend_stor
     KVUpdateFunc updateFunc = hg_update_edge_property;
     
     // Call kvt_update with our custom function
+    KVTKey kvtKey(keyStr);
     KVTError error = kvt_update(
         static_cast<uint64_t>(txId),
         static_cast<uint64_t>(tableId),
-        keyStr,
+        kvtKey,
         updateFunc,
         paramStr,
         resultValue,
