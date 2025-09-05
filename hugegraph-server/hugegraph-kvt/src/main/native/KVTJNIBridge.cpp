@@ -19,6 +19,7 @@
 #include <string>
 #include <vector>
 #include <cstring>
+#include <stdexcept>
 #include "org_apache_hugegraph_backend_store_kvt_KVTNative.h"
 #include "../../../kvt/kvt_inc.h"
 
@@ -496,14 +497,63 @@ JNIEXPORT jobjectArray JNICALL Java_org_apache_hugegraph_backend_store_kvt_KVTNa
     return result;
 }
 
+/**
+ * Helper function to decode variable-length integer (vInt)
+ */
+size_t decodeVInt(const unsigned char* data, size_t& bytes_read) {
+    size_t value = 0;
+    bytes_read = 0;
+    
+    while (true) {
+        unsigned char b = data[bytes_read];
+        value = (value << 7) | (b & 0x7F);
+        bytes_read++;
+        
+        if ((b & 0x80) == 0) {
+            break;
+        }
+        
+        if (bytes_read > 5) {  // Prevent infinite loops
+            throw std::runtime_error("Invalid vInt encoding");
+        }
+    }
+    
+    return value;
+}
+
+/**
+ * Helper function to encode variable-length integer (vInt)
+ */
+void encodeVInt(size_t value, std::string& output) {
+    if (value < 128) {
+        output.push_back(static_cast<char>(value));
+        return;
+    }
+    
+    // For larger values, use multi-byte encoding
+    std::vector<unsigned char> bytes;
+    while (value > 127) {
+        bytes.push_back((value & 0x7F) | 0x80);
+        value >>= 7;
+    }
+    bytes.push_back(value & 0x7F);
+    
+    // Write in reverse order
+    for (auto it = bytes.rbegin(); it != bytes.rend(); ++it) {
+        output.push_back(static_cast<char>(*it));
+    }
+}
+
 /*
  * Helper function to update vertex properties.
  * This function deserializes the existing vertex data, merges in the new property,
  * and serializes it back.
  * 
  * Format expected:
- * - original_value: [id_bytes][property_data...]
+ * - original_value: [id_bytes][column_data...]
  * - parameter: [property_key_len][property_key][property_value_len][property_value]
+ * 
+ * Column format: [name_len_vint][name_bytes][value_len_vint][value_bytes]
  */
 std::tuple<bool, bool, bool> hg_update_vertex_property(
     const std::string& key,
@@ -528,12 +578,10 @@ std::tuple<bool, bool, bool> hg_update_vertex_property(
         }
         
         // Read property name length (variable int encoding)
-        size_t prop_name_len = 0;
-        size_t len_bytes = 0;
         const unsigned char* param_data = reinterpret_cast<const unsigned char*>(parameter.data());
-        
-        // Simple variable int decoding (assuming single byte for now)
-        prop_name_len = param_data[param_pos++];
+        size_t bytes_read = 0;
+        size_t prop_name_len = decodeVInt(param_data + param_pos, bytes_read);
+        param_pos += bytes_read;
         
         if (param_pos + prop_name_len > parameter.size()) {
             result_value = "Invalid property name length";
@@ -549,7 +597,9 @@ std::tuple<bool, bool, bool> hg_update_vertex_property(
             return std::make_tuple(false, false, false);
         }
         
-        size_t prop_value_len = param_data[param_pos++];
+        size_t prop_value_len = decodeVInt(param_data + param_pos, bytes_read);
+        param_pos += bytes_read;
+        
         if (param_pos + prop_value_len > parameter.size()) {
             result_value = "Invalid property value length";
             return std::make_tuple(false, false, false);
@@ -557,24 +607,84 @@ std::tuple<bool, bool, bool> hg_update_vertex_property(
         
         std::string prop_value(parameter.data() + param_pos, prop_value_len);
         
-        // Now we need to merge this property into the original value
-        // The original value contains the full vertex data
-        // We'll copy it and update/add the property
+        // Parse the original value and rebuild it with the updated property
+        const unsigned char* orig_data = reinterpret_cast<const unsigned char*>(original_value.data());
+        size_t orig_pos = 0;
         
-        // For now, we'll do a simple approach:
-        // Copy the original value entirely and append the new property
-        // In a real implementation, we'd parse the structure and replace existing property
+        // Parse all columns and update the target property
+        std::vector<std::pair<std::string, std::string>> columns;
+        bool property_found = false;
         
-        new_value = original_value;
+        // Find where columns start (after the ID bytes)
+        // Simple heuristic: look for first valid column structure
+        size_t id_end_pos = 0;
+        for (size_t scan = 0; scan < original_value.size() - 2; scan++) {
+            size_t test_len = orig_data[scan];
+            if (test_len > 0 && test_len < 100 && scan + 1 + test_len < original_value.size()) {
+                size_t next = scan + 1 + test_len;
+                if (next < original_value.size()) {
+                    // Looks like a valid column
+                    id_end_pos = scan;
+                    break;
+                }
+            }
+        }
         
-        // Append the new property at the end (simplified approach)
-        // A proper implementation would parse the structure and update in place
-        new_value.push_back(static_cast<char>(prop_name_len));
-        new_value.append(prop_name);
-        new_value.push_back(static_cast<char>(prop_value_len));
-        new_value.append(prop_value);
+        // Copy ID bytes
+        new_value.clear();
+        new_value.append(original_value.data(), id_end_pos);
         
-        result_value = "Property updated successfully";
+        // Parse existing columns
+        orig_pos = id_end_pos;
+        while (orig_pos < original_value.size()) {
+            // Read column name length
+            size_t col_name_len = 0;
+            try {
+                col_name_len = decodeVInt(orig_data + orig_pos, bytes_read);
+                orig_pos += bytes_read;
+            } catch (...) {
+                break; // End of columns
+            }
+            
+            if (orig_pos + col_name_len > original_value.size()) break;
+            
+            std::string col_name(original_value.data() + orig_pos, col_name_len);
+            orig_pos += col_name_len;
+            
+            if (orig_pos >= original_value.size()) break;
+            
+            // Read column value length
+            size_t col_value_len = decodeVInt(orig_data + orig_pos, bytes_read);
+            orig_pos += bytes_read;
+            
+            if (orig_pos + col_value_len > original_value.size()) break;
+            
+            std::string col_value(original_value.data() + orig_pos, col_value_len);
+            orig_pos += col_value_len;
+            
+            // Update property if it matches
+            if (col_name == prop_name) {
+                columns.push_back({col_name, prop_value});
+                property_found = true;
+            } else {
+                columns.push_back({col_name, col_value});
+            }
+        }
+        
+        // Add property if not found
+        if (!property_found) {
+            columns.push_back({prop_name, prop_value});
+        }
+        
+        // Write all columns back
+        for (const auto& col : columns) {
+            encodeVInt(col.first.size(), new_value);
+            new_value.append(col.first);
+            encodeVInt(col.second.size(), new_value);
+            new_value.append(col.second);
+        }
+        
+        result_value = "Vertex property updated successfully";
         return std::make_tuple(true, true, true);
         
     } catch (const std::exception& e) {
@@ -656,12 +766,10 @@ std::tuple<bool, bool, bool> hg_update_edge_property(
         }
         
         // Read property name length (variable int encoding)
-        size_t prop_name_len = 0;
         const unsigned char* param_data = reinterpret_cast<const unsigned char*>(parameter.data());
-        
-        // Simple variable int decoding (assuming single byte for now)
-        // TODO: Implement full variable integer decoding for production
-        prop_name_len = param_data[param_pos++];
+        size_t bytes_read = 0;
+        size_t prop_name_len = decodeVInt(param_data + param_pos, bytes_read);
+        param_pos += bytes_read;
         
         if (param_pos + prop_name_len > parameter.size()) {
             result_value = "Invalid property name length";
@@ -677,7 +785,9 @@ std::tuple<bool, bool, bool> hg_update_edge_property(
             return std::make_tuple(false, false, false);
         }
         
-        size_t prop_value_len = param_data[param_pos++];
+        size_t prop_value_len = decodeVInt(param_data + param_pos, bytes_read);
+        param_pos += bytes_read;
+        
         if (param_pos + prop_value_len > parameter.size()) {
             result_value = "Invalid property value length";
             return std::make_tuple(false, false, false);
@@ -685,21 +795,82 @@ std::tuple<bool, bool, bool> hg_update_edge_property(
         
         std::string prop_value(parameter.data() + param_pos, prop_value_len);
         
-        // Now we need to merge this property into the original value
-        // The original value contains the full edge data
-        // We'll copy it and update/add the property
+        // Parse the original value and rebuild it with the updated property
+        const unsigned char* orig_data = reinterpret_cast<const unsigned char*>(original_value.data());
+        size_t orig_pos = 0;
         
-        // For now, we'll do a simple approach:
-        // Copy the original value entirely and append the new property
-        // TODO: In production, parse the structure and replace existing property
+        // Parse all columns and update the target property
+        std::vector<std::pair<std::string, std::string>> columns;
+        bool property_found = false;
         
-        new_value = original_value;
+        // Find where columns start (after the ID bytes)
+        // Simple heuristic: look for first valid column structure
+        size_t id_end_pos = 0;
+        for (size_t scan = 0; scan < original_value.size() - 2; scan++) {
+            size_t test_len = orig_data[scan];
+            if (test_len > 0 && test_len < 100 && scan + 1 + test_len < original_value.size()) {
+                size_t next = scan + 1 + test_len;
+                if (next < original_value.size()) {
+                    // Looks like a valid column
+                    id_end_pos = scan;
+                    break;
+                }
+            }
+        }
         
-        // Append the new property at the end (simplified approach)
-        new_value.push_back(static_cast<char>(prop_name_len));
-        new_value.append(prop_name);
-        new_value.push_back(static_cast<char>(prop_value_len));
-        new_value.append(prop_value);
+        // Copy ID bytes
+        new_value.clear();
+        new_value.append(original_value.data(), id_end_pos);
+        
+        // Parse existing columns
+        orig_pos = id_end_pos;
+        while (orig_pos < original_value.size()) {
+            // Read column name length
+            size_t col_name_len = 0;
+            try {
+                col_name_len = decodeVInt(orig_data + orig_pos, bytes_read);
+                orig_pos += bytes_read;
+            } catch (...) {
+                break; // End of columns
+            }
+            
+            if (orig_pos + col_name_len > original_value.size()) break;
+            
+            std::string col_name(original_value.data() + orig_pos, col_name_len);
+            orig_pos += col_name_len;
+            
+            if (orig_pos >= original_value.size()) break;
+            
+            // Read column value length
+            size_t col_value_len = decodeVInt(orig_data + orig_pos, bytes_read);
+            orig_pos += bytes_read;
+            
+            if (orig_pos + col_value_len > original_value.size()) break;
+            
+            std::string col_value(original_value.data() + orig_pos, col_value_len);
+            orig_pos += col_value_len;
+            
+            // Update property if it matches
+            if (col_name == prop_name) {
+                columns.push_back({col_name, prop_value});
+                property_found = true;
+            } else {
+                columns.push_back({col_name, col_value});
+            }
+        }
+        
+        // Add property if not found
+        if (!property_found) {
+            columns.push_back({prop_name, prop_value});
+        }
+        
+        // Write all columns back
+        for (const auto& col : columns) {
+            encodeVInt(col.first.size(), new_value);
+            new_value.append(col.first);
+            encodeVInt(col.second.size(), new_value);
+            new_value.append(col.second);
+        }
         
         result_value = "Edge property updated successfully";
         return std::make_tuple(true, true, true);
