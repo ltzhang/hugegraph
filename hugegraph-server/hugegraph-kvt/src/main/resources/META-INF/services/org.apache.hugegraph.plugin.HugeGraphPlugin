@@ -1,0 +1,2 @@
+# KVT Backend Plugin
+org.apache.hugegraph.backend.store.kvt.KVTPlugin

@@ -36,20 +36,58 @@ public class KVTStoreProvider extends AbstractBackendStoreProvider {
     
     static {
         // Load the native library
+        boolean loaded = false;
+        
+        // Try system library path first
         try {
             System.loadLibrary("kvtjni");
             LOG.info("Loaded kvtjni library from system path");
+            loaded = true;
         } catch (UnsatisfiedLinkError e) {
-            // Try to load from the module's target directory
+            // Ignore, try other methods
+        }
+        
+        // Try loading from classpath resources
+        if (!loaded) {
             try {
-                String libPath = System.getProperty("user.dir") + 
-                               "/hugegraph-server/hugegraph-kvt/target/native/libkvtjni.so";
-                System.load(libPath);
-                LOG.info("Loaded kvtjni library from: {}", libPath);
-            } catch (UnsatisfiedLinkError e2) {
-                LOG.error("Failed to load kvtjni library", e2);
-                throw new RuntimeException("Cannot load KVT JNI library", e2);
+                // This will work when the library is packaged in the JAR
+                KVTNative.class.getClassLoader();
+                System.loadLibrary("kvtjni");
+                LOG.info("Loaded kvtjni library from classpath");
+                loaded = true;
+            } catch (UnsatisfiedLinkError e) {
+                // Ignore, try other methods
             }
+        }
+        
+        // Try loading from current working directory
+        if (!loaded) {
+            String[] possiblePaths = {
+                "target/native/libkvtjni.so",
+                "hugegraph-server/hugegraph-kvt/target/native/libkvtjni.so",
+                System.getProperty("user.dir") + "/target/native/libkvtjni.so"
+            };
+            
+            for (String path : possiblePaths) {
+                try {
+                    java.io.File libFile = new java.io.File(path);
+                    if (libFile.exists()) {
+                        System.load(libFile.getAbsolutePath());
+                        LOG.info("Loaded kvtjni library from: {}", libFile.getAbsolutePath());
+                        loaded = true;
+                        break;
+                    }
+                } catch (UnsatisfiedLinkError e) {
+                    // Continue trying other paths
+                }
+            }
+        }
+        
+        if (!loaded) {
+            LOG.error("Failed to load kvtjni library from any location. " +
+                     "Please ensure the library is in the java.library.path or " +
+                     "in target/native/libkvtjni.so");
+            throw new RuntimeException("Cannot load KVT JNI library");
         }
     }
 
