@@ -11,10 +11,8 @@ public class TestKVTBackend {
     static {
         // Load the JNI library
         try {
-            String libPath = System.getProperty("user.dir") + 
-                           "/target/native/libkvtjni.so";
-            System.load(libPath);
-            System.out.println("Loaded library from: " + libPath);
+            System.loadLibrary("kvtjni");
+            System.out.println("Loaded kvtjni library successfully");
         } catch (UnsatisfiedLinkError e) {
             System.err.println("Failed to load library: " + e.getMessage());
             throw e;

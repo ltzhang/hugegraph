@@ -25,7 +25,7 @@ SOURCES := KVTJNIBridge.cpp
 OBJECTS := $(SOURCES:.cpp=.o)
 
 # KVT library
-KVT_OBJ := ../../../kvt/kvt_memory.o
+KVT_OBJ := ../../../kvt/kvt_mem.o
 
 # Output
 OUTDIR := ../../../target/native

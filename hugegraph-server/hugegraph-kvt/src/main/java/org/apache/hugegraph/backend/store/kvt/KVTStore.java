@@ -172,10 +172,16 @@ public abstract class KVTStore extends AbstractBackendStore<KVTSession> {
             
             if (result.error == KVTNative.KVTError.TABLE_ALREADY_EXISTS) {
                 // Table already exists, get its ID
-                KVTNative.KVTResult<Long> idResult = 
-                    KVTNative.nativeGetTableId(tableName)[0] instanceof Integer ? 
-                    null : null;  // This needs proper implementation
-                LOG.debug("Table {} already exists", tableName);
+                Object[] idResult = KVTNative.nativeGetTableId(tableName);
+                if ((Integer)idResult[0] == 0) { // SUCCESS
+                    long tableId = (Long)idResult[1];
+                    table.setTableId(tableId);
+                    this.tableIdToName.put(tableId, tableName);
+                    LOG.debug("Table {} already exists with ID {}", tableName, tableId);
+                } else {
+                    throw new BackendException("Failed to get table ID for %s: %s",
+                                             tableName, idResult[2]);
+                }
             } else if (result.error != KVTNative.KVTError.SUCCESS) {
                 throw new BackendException("Failed to create table %s: %s",
                                          tableName, result.errorMessage);

@@ -81,6 +81,7 @@
                                 <echo message="Building native KVT library..."/>
                                 <mkdir dir="${project.build.directory}/native"/>
                                 <exec executable="make" dir="${project.basedir}/src/main/native" failonerror="false">
+                                    <env key="JAVA_HOME" value="/usr/lib/jvm/java-11-openjdk-amd64"/>
                                     <arg value="clean"/>
                                     <arg value="all"/>
                                     <arg value="OUTDIR=${project.build.directory}/native"/>

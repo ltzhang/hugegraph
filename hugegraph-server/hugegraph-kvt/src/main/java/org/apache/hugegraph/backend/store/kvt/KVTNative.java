@@ -390,4 +390,68 @@ public class KVTNative {
         // For now, return success
         return 0;
     }
+    
+    // Additional utility methods needed by tests
+    public static KVTResult<String> getTableName(long tableId) {
+        Object[] result = nativeGetTableName(tableId);
+        return new KVTResult<>(
+            KVTError.fromCode((Integer) result[0]),
+            (String) result[1],
+            (String) result[2]
+        );
+    }
+    
+    public static KVTResult<List<Long>> listTables() {
+        Object[] result = nativeListTables();
+        KVTError error = KVTError.fromCode((Integer) result[0]);
+        if (error != KVTError.SUCCESS) {
+            return new KVTResult<>(error, null, (String) result[3]);
+        }
+        
+        // Result format: [errorCode, tableNames, tableIds, errorMsg]
+        Object[] tableIdObjects = (Object[]) result[2];
+        List<Long> list = new ArrayList<>();
+        if (tableIdObjects != null) {
+            for (Object idObj : tableIdObjects) {
+                list.add((Long) idObj);
+            }
+        }
+        return new KVTResult<>(error, list, (String) result[3]);
+    }
+    
+    public static KVTResult<List<KVTOpResult>> executeBatch(long txId, List<KVTOp> ops) {
+        int numOps = ops.size();
+        int[] opTypes = new int[numOps];
+        long[] tableIds = new long[numOps];
+        byte[][] keys = new byte[numOps][];
+        byte[][] values = new byte[numOps][];
+        
+        for (int i = 0; i < numOps; i++) {
+            KVTOp op = ops.get(i);
+            opTypes[i] = op.op.getCode();
+            tableIds[i] = op.tableId;
+            keys[i] = op.key;
+            values[i] = op.value;
+        }
+        
+        Object[] result = nativeBatchExecute(txId, opTypes, tableIds, keys, values);
+        KVTError error = KVTError.fromCode((Integer) result[0]);
+        
+        if (error != KVTError.SUCCESS && error != KVTError.BATCH_NOT_FULLY_SUCCESS) {
+            return new KVTResult<>(error, null, (String) result[2]);
+        }
+        
+        int[] errorCodes = (int[]) result[1];
+        byte[][] returnValues = (byte[][]) result[2];
+        
+        List<KVTOpResult> results = new ArrayList<>();
+        for (int i = 0; i < numOps; i++) {
+            KVTError opError = KVTError.fromCode(errorCodes[i]);
+            byte[] value = (returnValues != null && i < returnValues.length) ? returnValues[i] : null;
+            results.add(new KVTOpResult(opError, value));
+        }
+        
+        return new KVTResult<>(error, results, "");
+    }
+    
 }

@@ -291,6 +291,7 @@ KVTError kvt_update(uint64_t tx_id,
     std::string& result_value,
     std::string& error_msg);
 
+
 /**
 * @param tx_id Transaction ID (0 for auto-commit/one-shot operation)
 * @param table_id ID of the table
