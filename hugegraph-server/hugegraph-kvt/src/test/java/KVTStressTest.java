@@ -229,11 +229,20 @@ public class KVTStressTest {
         System.out.println("Checking consistency: " + context);
         
         // Scan entire key range
+        System.out.println("DEBUG: Scanning from " + keyToString(0) + " to " + keyToString(MAX_KEY) + " with limit " + MAX_KEY);
         Object[] scanResult = KVTNative.nativeScan(0, tableId, 
             keyToString(0).getBytes(), keyToString(MAX_KEY).getBytes(), MAX_KEY);
         
+        if (scanResult == null) {
+            System.err.println("ERROR: nativeScan returned null!");
+            System.exit(1);
+        }
+        
+        System.out.println("DEBUG: scanResult length = " + scanResult.length);
+        System.out.println("DEBUG: scanResult[0] = " + scanResult[0] + " (type: " + (scanResult[0] != null ? scanResult[0].getClass() : "null") + ")");
+        
         KVTNative.KVTError scanError = KVTNative.KVTError.fromCode((Integer)scanResult[0]);
-        if (scanError != KVTNative.KVTError.SUCCESS) {
+        if (scanError != KVTNative.KVTError.SUCCESS && scanError != KVTNative.KVTError.SCAN_LIMIT_REACHED) {
             System.err.println("Failed to scan database: " + scanError);
             System.exit(1);
         }
@@ -392,12 +401,20 @@ public class KVTStressTest {
                 endKey = tmp;
             }
             
+            System.out.println("DEBUG SCAN: txId=" + ctx.txId + ", startKey=" + keyToString(startKey) + 
+                ", endKey=" + keyToString(endKey) + ", limit=" + RANGE_SIZE);
             Object[] scanResult = KVTNative.nativeScan(ctx.txId, tableId,
                 keyToString(startKey).getBytes(), keyToString(endKey).getBytes(), RANGE_SIZE);
             
+            if (scanResult == null) {
+                System.err.println("ERROR: nativeScan returned null!");
+                System.exit(1);
+            }
+            System.out.println("DEBUG SCAN: result[0]=" + scanResult[0] + " length=" + scanResult.length);
+            
             KVTNative.KVTError scanError = KVTNative.KVTError.fromCode((Integer)scanResult[0]);
-            if (scanError != KVTNative.KVTError.SUCCESS) {
-                System.err.println("Failed to scan: " + scanError);
+            if (scanError != KVTNative.KVTError.SUCCESS && scanError != KVTNative.KVTError.SCAN_LIMIT_REACHED) {
+                System.err.println("Failed to scan: " + scanError + " (code=" + scanResult[0] + ")");
                 System.exit(1);
             }
             

@@ -108,8 +108,6 @@ hugegraph-kvt/
 ├── build.sh                              # Main build script
 ├── pom.xml                               # Maven configuration
 ├── KVT_README.md                         # Basic documentation
-├── NATIVE_BUILD.md                       # Native build guide
-├── TEST_RESULTS.md                       # Test execution results
 └── KVT_INTEGRATION_GUIDE.md             # This document
 ```
 

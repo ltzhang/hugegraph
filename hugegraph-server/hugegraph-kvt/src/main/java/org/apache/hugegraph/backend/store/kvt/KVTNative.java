@@ -53,7 +53,9 @@ public class KVTNative {
         ONE_SHOT_WRITE_NOT_ALLOWED(11),
         ONE_SHOT_DELETE_NOT_ALLOWED(12),
         BATCH_NOT_FULLY_SUCCESS(13),
-        UNKNOWN_ERROR(14);
+        SCAN_LIMIT_REACHED(14),  // Not an error, just informational
+        EXT_FUNC_ERROR(15),
+        UNKNOWN_ERROR(16);
 
         private final int code;
 
