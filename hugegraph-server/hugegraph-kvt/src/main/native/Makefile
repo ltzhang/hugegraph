@@ -17,7 +17,7 @@ endif
 
 # Compiler settings
 CXX := g++
-CXXFLAGS := -Wall -O2 -fPIC -std=c++11
+CXXFLAGS := -Wall -O2 -fPIC -std=c++14
 INCLUDES := $(JNIFLAGS) -I../../../kvt
 
 # Source files

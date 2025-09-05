@@ -144,6 +144,46 @@ public class KVTBackendEntry extends BinaryBackendEntry {
         return super.columns();
     }
     
+    /**
+     * Convert any BackendEntry to bytes for storage
+     */
+    public static byte[] convertToBytes(BackendEntry entry) {
+        if (entry instanceof KVTBackendEntry) {
+            return ((KVTBackendEntry) entry).columnsBytes();
+        }
+        
+        // Convert BinaryBackendEntry or other entry types
+        Collection<BackendColumn> columns = entry.columns();
+        if (columns == null || columns.isEmpty()) {
+            return EMPTY_BYTES;
+        }
+        
+        // Calculate total size needed
+        int totalSize = 4; // For column count
+        for (BackendColumn column : columns) {
+            totalSize += 4 + column.name.length;  // name length + name
+            totalSize += 4 + column.value.length; // value length + value
+        }
+        
+        ByteBuffer buffer = ByteBuffer.allocate(totalSize);
+        
+        // Write column count
+        buffer.putInt(columns.size());
+        
+        // Write each column
+        for (BackendColumn column : columns) {
+            // Write name
+            buffer.putInt(column.name.length);
+            buffer.put(column.name);
+            
+            // Write value
+            buffer.putInt(column.value.length);
+            buffer.put(column.value);
+        }
+        
+        return buffer.array();
+    }
+    
     @Override
     public void merge(BackendEntry other) {
         // Ensure both entries have their columns loaded

@@ -8,7 +8,7 @@ import org.apache.tinkerpop.gremlin.structure.Vertex;
 
 import java.util.Iterator;
 
-public class TestHugeGraphKVTIntegration {
+public class HugeGraphKVTIntegrationTest {
     
     public static void main(String[] args) {
         System.out.println("=== HugeGraph KVT Integration Test ===\n");
@@ -57,9 +57,11 @@ public class TestHugeGraphKVTIntegration {
             
             System.out.println("   ✓ Schema created");
             
+            // Commit any pending schema changes
+            graph.tx().commit();
+            
             // 3. Add vertices
             System.out.println("\n3. Adding vertices...");
-            graph.tx().open();
             
             Vertex alice = graph.addVertex(
                 T.label, "person",
@@ -141,7 +143,6 @@ public class TestHugeGraphKVTIntegration {
             
             // 10. Update vertex property
             System.out.println("\n10. Updating vertex property...");
-            graph.tx().open();
             Vertex aliceToUpdate = graph.vertices("alice").next();
             aliceToUpdate.property("age", 31);
             graph.tx().commit();
@@ -154,7 +155,6 @@ public class TestHugeGraphKVTIntegration {
             
             // 11. Delete an edge
             System.out.println("\n11. Deleting edge...");
-            graph.tx().open();
             graph.traversal()
                  .V("alice")
                  .outE("knows")

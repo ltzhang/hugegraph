@@ -93,3 +93,4 @@ hugegraph-server/hugegraph-kvt/kvt/kvt_memory.o
 hugegraph-server/hugegraph-kvt/kvt/libkvt.so
 hugegraph-server/hugegraph-kvt/src/main/native/KVTJNIBridge.o
 hugegraph-server/hugegraph-kvt/kvt/kvt_mem.o
+hugegraph-server/hugegraph-kvt/kvt/libkvt.so

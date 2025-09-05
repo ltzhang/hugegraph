@@ -7,4 +7,4 @@ CP=$(cat classpath.txt)
 export LD_LIBRARY_PATH=target/native:$LD_LIBRARY_PATH
 java -cp target/classes:target/test-classes:$CP \
      -Djava.library.path=target/native \
-     TestHugeGraphKVTIntegration
+     HugeGraphKVTIntegrationTest

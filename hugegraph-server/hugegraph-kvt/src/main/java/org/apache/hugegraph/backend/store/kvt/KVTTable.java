@@ -30,6 +30,7 @@ import org.apache.hugegraph.backend.query.IdQuery;
 import org.apache.hugegraph.backend.query.Query;
 import org.apache.hugegraph.backend.serializer.BinaryBackendEntry;
 import org.apache.hugegraph.backend.serializer.BinarySerializer;
+import org.apache.hugegraph.backend.serializer.BytesBuffer;
 import org.apache.hugegraph.backend.store.BackendEntry;
 import org.apache.hugegraph.backend.store.BackendTable;
 import org.apache.hugegraph.backend.store.Shard;
@@ -44,13 +45,13 @@ import org.slf4j.Logger;
  * KVT table implementation.
  * Maps HugeGraph table operations to KVT key-value operations.
  */
-public class KVTTable extends BackendTable<KVTSession, KVTBackendEntry> {
+public class KVTTable extends BackendTable<KVTSession, BackendEntry> {
 
     private static final Logger LOG = Log.logger(KVTTable.class);
     
     private final HugeType type;
     private final boolean rangePartitioned;
-    private long tableId;
+    protected long tableId;
     private final KVTQueryCache cache;
     private final boolean cacheEnabled;
     
@@ -99,21 +100,63 @@ public class KVTTable extends BackendTable<KVTSession, KVTBackendEntry> {
     
     @Override
     public void clear(KVTSession session) {
-        // Clear all data in the table
-        // TODO: Implement table clearing (scan and delete all)
-        LOG.warn("Table clear not yet implemented for {}", this.table());
+        // Clear all data in the table by scanning and deleting all keys
+        LOG.info("Clearing table {} (tableId: {})", this.table(), this.tableId);
+        
+        // Scan all keys in the table with empty start and end keys
+        byte[] startKey = new byte[0];
+        byte[] endKey = new byte[0];
+        int batchSize = 1000;
+        int totalDeleted = 0;
+        
+        while (true) {
+            // Scan a batch of keys
+            Iterator<KVTNative.KVTPair> iter = session.scan(this.tableId, startKey, endKey, batchSize);
+            
+            List<KVTNative.KVTPair> batch = new ArrayList<>();
+            while (iter.hasNext() && batch.size() < batchSize) {
+                batch.add(iter.next());
+            }
+            
+            if (batch.isEmpty()) {
+                break; // No more keys
+            }
+            
+            // Delete each key in the batch
+            for (KVTNative.KVTPair pair : batch) {
+                session.delete(this.tableId, pair.key);
+                totalDeleted++;
+            }
+            
+            // If we got less than batchSize, we're done
+            if (batch.size() < batchSize) {
+                break;
+            }
+            
+            // Update startKey for next batch (start after last key)
+            byte[] lastKey = batch.get(batch.size() - 1).key;
+            startKey = new byte[lastKey.length + 1];
+            System.arraycopy(lastKey, 0, startKey, 0, lastKey.length);
+            startKey[lastKey.length] = 0x01; // Ensure we start after the last key
+        }
+        
+        LOG.info("Cleared {} entries from table {}", totalDeleted, this.table());
     }
     
     /**
      * Insert or update an entry
      */
     @Override
-    public void insert(KVTSession session, KVTBackendEntry entry) {
-        assert entry instanceof KVTBackendEntry;
-        KVTBackendEntry kvtEntry = (KVTBackendEntry) entry;
+    public void insert(KVTSession session, BackendEntry entry) {
+        byte[] key = KVTIdUtil.idToBytes(this.type, entry.id());
         
-        byte[] key = KVTIdUtil.idToBytes(this.type, kvtEntry.id());
-        byte[] value = kvtEntry.columnsBytes();
+        // Serialize the entry's columns to bytes
+        BytesBuffer buffer = BytesBuffer.allocate(0);
+        for (BackendEntry.BackendColumn column : entry.columns()) {
+            buffer.write(column.name);
+            buffer.write(column.value);
+        }
+        byte[] value = buffer.bytes();
         
         session.set(this.tableId, key, value);
         
@@ -130,11 +173,8 @@ public class KVTTable extends BackendTable<KVTSession, KVTBackendEntry> {
      * Delete an entry
      */
     @Override
-    public void delete(KVTSession session, KVTBackendEntry entry) {
-        assert entry instanceof KVTBackendEntry;
-        KVTBackendEntry kvtEntry = (KVTBackendEntry) entry;
-        
-        byte[] key = KVTIdUtil.idToBytes(this.type, kvtEntry.id());
+    public void delete(KVTSession session, BackendEntry entry) {
+        byte[] key = KVTIdUtil.idToBytes(this.type, entry.id());
         session.delete(this.tableId, key);
         
         LOG.trace("Deleted entry with key {} from table {}", 
@@ -145,7 +185,7 @@ public class KVTTable extends BackendTable<KVTSession, KVTBackendEntry> {
      * Append columns to an entry
      */
     @Override
-    public void append(KVTSession session, KVTBackendEntry entry) {
+    public void append(KVTSession session, BackendEntry entry) {
         // For KVT, append is similar to insert (overwrites the value)
         // In a real implementation, you might want to merge columns
         this.insert(session, entry);
@@ -155,12 +195,9 @@ public class KVTTable extends BackendTable<KVTSession, KVTBackendEntry> {
      * Eliminate specific columns from an entry
      */
     @Override
-    public void eliminate(KVTSession session, KVTBackendEntry entry) {
-        assert entry instanceof KVTBackendEntry;
-        KVTBackendEntry kvtEntry = (KVTBackendEntry) entry;
-        
+    public void eliminate(KVTSession session, BackendEntry entry) {
         // Get existing entry
-        byte[] key = KVTIdUtil.idToBytes(this.type, kvtEntry.id());
+        byte[] key = KVTIdUtil.idToBytes(this.type, entry.id());
         byte[] existingValue = session.get(this.tableId, key);
         
         if (existingValue == null) {
@@ -199,8 +236,8 @@ public class KVTTable extends BackendTable<KVTSession, KVTBackendEntry> {
         } else if (query instanceof ConditionQuery) {
             result = this.queryByCondition(session, (ConditionQuery) query);
         } else {
-            throw new BackendException("Unsupported query type: %s", 
-                                     query.getClass());
+            // Base Query class - scan all entries
+            result = this.scanTable(session, query);
         }
         
         // Apply optimization
@@ -228,8 +265,7 @@ public class KVTTable extends BackendTable<KVTSession, KVTBackendEntry> {
             byte[] value = session.get(this.tableId, key);
             
             if (value != null) {
-                KVTBackendEntry entry = new KVTBackendEntry(this.type, id);
-                entry.columnsBytes(value);
+                BinaryBackendEntry entry = new BinaryBackendEntry(this.type, value);
                 entries.add(entry);
             }
         }
@@ -262,10 +298,7 @@ public class KVTTable extends BackendTable<KVTSession, KVTBackendEntry> {
             session.scan(this.tableId, range.startKey, range.endKey, limit);
         
         Iterator<BackendEntry> entries = new MapperIterator<>(pairs, pair -> {
-            Id id = KVTIdUtil.bytesToId(pair.key);
-            KVTBackendEntry entry = new KVTBackendEntry(this.type, id);
-            entry.columnsBytes(pair.value);
-            return entry;
+            return new BinaryBackendEntry(this.type, pair.value);
         });
         
         // Apply filter conditions if any
@@ -287,10 +320,7 @@ public class KVTTable extends BackendTable<KVTSession, KVTBackendEntry> {
             session.scan(this.tableId, startKey, endKey, limit);
         
         return new MapperIterator<>(pairs, pair -> {
-            Id id = KVTIdUtil.bytesToId(pair.key);
-            KVTBackendEntry entry = new KVTBackendEntry(this.type, id);
-            entry.columnsBytes(pair.value);
-            return entry;
+            return new BinaryBackendEntry(this.type, pair.value);
         });
     }
     
@@ -307,11 +337,8 @@ public class KVTTable extends BackendTable<KVTSession, KVTBackendEntry> {
     }
     
     @Override
-    public boolean queryExist(KVTSession session, KVTBackendEntry entry) {
-        assert entry instanceof KVTBackendEntry;
-        KVTBackendEntry kvtEntry = (KVTBackendEntry) entry;
-        
-        byte[] key = KVTIdUtil.idToBytes(this.type, kvtEntry.id());
+    public boolean queryExist(KVTSession session, BackendEntry entry) {
+        byte[] key = KVTIdUtil.idToBytes(this.type, entry.id());
         byte[] value = session.get(this.tableId, key);
         
         return value != null;
