@@ -18,6 +18,7 @@
 package org.apache.hugegraph.backend.store.kvt;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
 
@@ -27,6 +28,8 @@ import org.apache.hugegraph.backend.id.IdGenerator;
 import org.apache.hugegraph.backend.query.Condition;
 import org.apache.hugegraph.backend.query.ConditionQuery;
 import org.apache.hugegraph.backend.query.IdQuery;
+import org.apache.hugegraph.backend.query.IdPrefixQuery;
+import org.apache.hugegraph.backend.query.IdRangeQuery;
 import org.apache.hugegraph.backend.query.Query;
 import org.apache.hugegraph.backend.serializer.BinaryBackendEntry;
 import org.apache.hugegraph.backend.serializer.BinaryBackendEntry.BinaryId;
@@ -324,14 +327,27 @@ public class KVTTable extends BackendTable<KVTSession, BackendEntry> {
         KVTQueryOptimizer.QueryPlan plan = 
             KVTQueryOptimizer.optimize(query, this.type);
         
-        // Execute query based on plan
+        // Execute query based on plan - following RocksDB pattern
         Iterator<BackendEntry> result;
-        if (query instanceof IdQuery) {
+        
+        // Query by prefix - optimized scan
+        if (query instanceof IdPrefixQuery) {
+            result = this.queryByPrefix(session, (IdPrefixQuery) query);
+        }
+        // Query by range - optimized scan
+        else if (query instanceof IdRangeQuery) {
+            result = this.queryByRange(session, (IdRangeQuery) query);
+        }
+        // Query by specific IDs
+        else if (query instanceof IdQuery) {
             result = this.queryById(session, (IdQuery) query);
-        } else if (query instanceof ConditionQuery) {
+        }
+        // Query with conditions
+        else if (query instanceof ConditionQuery) {
             result = this.queryByCondition(session, (ConditionQuery) query);
-        } else {
-            // Base Query class - scan all entries
+        }
+        // Base Query class - scan all entries
+        else {
             result = this.scanTable(session, query);
         }
         
@@ -369,11 +385,74 @@ public class KVTTable extends BackendTable<KVTSession, BackendEntry> {
         return entries.iterator();
     }
     
+    /**
+     * Query by prefix - optimized prefix scan following RocksDB pattern
+     */
+    private Iterator<BackendEntry> queryByPrefix(KVTSession session, IdPrefixQuery query) {
+        // Calculate scan range based on prefix
+        byte[] prefix = query.prefix().asBytes();
+        byte[] start = query.start().asBytes();
+        
+        // If start is not at the beginning of prefix, use it; otherwise use prefix
+        if (!Arrays.equals(start, prefix)) {
+            // Start is specified separately from prefix
+            start = start;
+        }
+        
+        // End key is prefix + max value to scan entire prefix range
+        byte[] end = KVTIdUtil.prefixEnd(prefix);
+        
+        int limit = query.limit() == Query.NO_LIMIT ? 
+                   Integer.MAX_VALUE : (int) query.limit();
+        
+        // Perform prefix scan
+        Iterator<KVTNative.KVTPair> pairs = 
+            session.scan(this.tableId, start, end, limit);
+        
+        // Convert to BackendEntry iterator
+        return new MapperIterator<>(pairs, pair -> {
+            Id id = KVTIdUtil.bytesToId(pair.key);
+            return parseStoredEntry(id, pair.value);
+        });
+    }
+    
+    /**
+     * Query by range - optimized range scan following RocksDB pattern
+     */
+    private Iterator<BackendEntry> queryByRange(KVTSession session, IdRangeQuery query) {
+        byte[] start = query.start().asBytes();
+        byte[] end = query.end() == null ? null : query.end().asBytes();
+        
+        // Adjust for inclusive/exclusive boundaries
+        if (!query.inclusiveStart() && start != null) {
+            // Exclusive start - increment start key
+            start = KVTIdUtil.incrementBytes(start);
+        }
+        
+        if (query.inclusiveEnd() && end != null) {
+            // Inclusive end - increment end key for scan
+            end = KVTIdUtil.incrementBytes(end);
+        }
+        
+        int limit = query.limit() == Query.NO_LIMIT ? 
+                   Integer.MAX_VALUE : (int) query.limit();
+        
+        // Perform range scan
+        Iterator<KVTNative.KVTPair> pairs = 
+            session.scan(this.tableId, start, end, limit);
+        
+        // Convert to BackendEntry iterator
+        return new MapperIterator<>(pairs, pair -> {
+            Id id = KVTIdUtil.bytesToId(pair.key);
+            return parseStoredEntry(id, pair.value);
+        });
+    }
+    
     private Iterator<BackendEntry> queryByCondition(KVTSession session, 
                                                    ConditionQuery query) {
         // For range queries on range-partitioned tables
         if (this.rangePartitioned && query.hasRangeCondition()) {
-            return this.queryByRange(session, query);
+            return this.queryByRangeCondition(session, query);
         }
         
         // For other queries, we need to scan
@@ -381,8 +460,8 @@ public class KVTTable extends BackendTable<KVTSession, BackendEntry> {
         return this.scanTable(session, query);
     }
     
-    private Iterator<BackendEntry> queryByRange(KVTSession session, 
-                                               ConditionQuery query) {
+    private Iterator<BackendEntry> queryByRangeCondition(KVTSession session, 
+                                                        ConditionQuery query) {
         // Extract range conditions using query translator
         KVTQueryTranslator.ScanRange range = 
             KVTQueryTranslator.translateToScan(query, this.type);

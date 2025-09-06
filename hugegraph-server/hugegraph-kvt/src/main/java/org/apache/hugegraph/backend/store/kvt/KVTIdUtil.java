@@ -326,4 +326,52 @@ public class KVTIdUtil {
         
         return Integer.compare(id1.length, id2.length);
     }
+    
+    /**
+     * Calculate the end key for a prefix scan
+     * This returns prefix + max value to scan entire prefix range
+     */
+    public static byte[] prefixEnd(byte[] prefix) {
+        // Find the last byte that can be incremented
+        byte[] end = new byte[prefix.length];
+        System.arraycopy(prefix, 0, end, 0, prefix.length);
+        
+        for (int i = end.length - 1; i >= 0; i--) {
+            if (end[i] != (byte) 0xFF) {
+                end[i]++;
+                return end;
+            }
+            // If byte is 0xFF, set to 0 and continue to next byte
+            end[i] = 0;
+        }
+        
+        // If all bytes are 0xFF, return prefix + 0xFF
+        byte[] maxEnd = new byte[prefix.length + 1];
+        System.arraycopy(prefix, 0, maxEnd, 0, prefix.length);
+        maxEnd[prefix.length] = (byte) 0xFF;
+        return maxEnd;
+    }
+    
+    /**
+     * Increment a byte array by 1
+     * Used for exclusive range boundaries
+     */
+    public static byte[] incrementBytes(byte[] bytes) {
+        byte[] result = new byte[bytes.length];
+        System.arraycopy(bytes, 0, result, 0, bytes.length);
+        
+        for (int i = result.length - 1; i >= 0; i--) {
+            if (result[i] != (byte) 0xFF) {
+                result[i]++;
+                return result;
+            }
+            result[i] = 0;
+        }
+        
+        // If all bytes are 0xFF, need to extend array
+        byte[] extended = new byte[bytes.length + 1];
+        extended[0] = 1;
+        return extended;
+    }
+    
 }
