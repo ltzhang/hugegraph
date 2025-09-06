@@ -1,6 +1,10 @@
-import org.apache.hugegraph.backend.store.kvt.KVTNative;
-import org.apache.hugegraph.backend.store.kvt.KVTIdUtil;
+package org.apache.hugegraph.backend.store.kvt;
+
 import java.util.*;
+import org.junit.Test;
+import org.junit.BeforeClass;
+import org.junit.AfterClass;
+import static org.junit.Assert.*;
 
 /**
  * Test for prefix scan optimization in KVT backend
@@ -10,40 +14,20 @@ public class TestPrefixScanOptimization {
     private static Map<String, Long> tableIds = new HashMap<>();
     
     static {
-        String libPath = System.getProperty("user.dir") + "/target/native";
-        System.setProperty("java.library.path", libPath);
-        try {
-            System.load(libPath + "/libkvtjni.so");
-        } catch (UnsatisfiedLinkError e) {
-            System.err.println("Failed to load library: " + e.getMessage());
-            System.exit(1);
-        }
+        // Library will be loaded by KVTNative static initializer
     }
     
-    public static void main(String[] args) {
-        System.out.println("=== Testing Prefix Scan Optimization ===\n");
-        
-        try {
-            // Initialize
-            initialize();
-            
-            // Run tests
-            testPrefixScan();
-            testRangeScan();
-            testHierarchicalKeys();
-            testPerformanceComparison();
-            
-            // Cleanup
-            cleanup();
-            
-            System.out.println("\n=== ALL PREFIX SCAN TESTS PASSED ===");
-            
-        } catch (Exception e) {
-            System.err.println("Test failed: " + e);
-            e.printStackTrace();
-            System.exit(1);
-        }
+    @BeforeClass
+    public static void setup() {
+        initialize();
     }
+    
+    @AfterClass
+    public static void teardown() {
+        cleanup();
+    }
+    
+    // Individual test methods are now annotated with @Test
     
     private static void initialize() {
         System.out.println("1. Initializing KVT...");
@@ -63,7 +47,8 @@ public class TestPrefixScanOptimization {
         System.out.println("   ✓ KVT initialized with test table");
     }
     
-    private static void testPrefixScan() {
+    @Test
+    public void testPrefixScan() {
         System.out.println("\n2. Testing prefix scan...");
         
         Object[] txResult = KVTNative.nativeStartTransaction();
@@ -119,7 +104,8 @@ public class TestPrefixScanOptimization {
         System.out.println("   ✓ Prefix scan verification successful");
     }
     
-    private static void testRangeScan() {
+    @Test
+    public void testRangeScan() {
         System.out.println("\n3. Testing range scan...");
         
         Object[] txResult = KVTNative.nativeStartTransaction();
@@ -156,7 +142,8 @@ public class TestPrefixScanOptimization {
         System.out.println("   ✓ Range scan verification successful");
     }
     
-    private static void testHierarchicalKeys() {
+    @Test
+    public void testHierarchicalKeys() {
         System.out.println("\n4. Testing hierarchical key encoding...");
         
         Object[] txResult = KVTNative.nativeStartTransaction();
@@ -209,12 +196,20 @@ public class TestPrefixScanOptimization {
         System.out.println("   ✓ Hierarchical key encoding works correctly");
     }
     
-    private static void testPerformanceComparison() {
+    @Test
+    public void testPerformanceComparison() {
         System.out.println("\n5. Testing performance improvement...");
+        
+        // Create a separate table for performance testing
+        Object[] tableResult = KVTNative.nativeCreateTable("perf_test", "range");
+        if ((int)tableResult[0] != 0) {
+            throw new RuntimeException("Failed to create performance test table");
+        }
+        long tableId = (long)tableResult[1];
+        tableIds.put("perf_test", tableId);
         
         Object[] txResult = KVTNative.nativeStartTransaction();
         long txId = (long)txResult[1];
-        long tableId = tableIds.get("test_prefix");
         
         // Insert many records
         int totalRecords = 10000;
@@ -285,6 +280,10 @@ public class TestPrefixScanOptimization {
         
         // Cleanup
         KVTNative.nativeCommitTransaction(txId);
+        
+        // Drop the performance test table
+        KVTNative.nativeDropTable(tableId);
+        tableIds.remove("perf_test");
         
         System.out.println("   ✓ Prefix scan optimization provides significant performance gains");
     }

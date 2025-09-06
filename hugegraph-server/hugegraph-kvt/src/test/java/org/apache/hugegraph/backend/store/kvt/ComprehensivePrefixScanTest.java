@@ -1,8 +1,12 @@
-import org.apache.hugegraph.backend.store.kvt.KVTNative;
-import org.apache.hugegraph.backend.store.kvt.KVTIdUtil;
+package org.apache.hugegraph.backend.store.kvt;
+
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
+import org.junit.Test;
+import org.junit.BeforeClass;
+import org.junit.AfterClass;
+import static org.junit.Assert.*;
 
 /**
  * Comprehensive test suite for prefix scan optimization in KVT backend
@@ -14,14 +18,7 @@ public class ComprehensivePrefixScanTest {
     private static final int CONCURRENT_THREADS = 10;
     
     static {
-        String libPath = System.getProperty("user.dir") + "/target/native";
-        System.setProperty("java.library.path", libPath);
-        try {
-            System.load(libPath + "/libkvtjni.so");
-        } catch (UnsatisfiedLinkError e) {
-            System.err.println("Failed to load library: " + e.getMessage());
-            System.exit(1);
-        }
+        // Library will be loaded by KVTNative static initializer
     }
     
     public static void main(String[] args) {
