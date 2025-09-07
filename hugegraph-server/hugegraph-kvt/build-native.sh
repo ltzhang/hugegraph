@@ -108,7 +108,7 @@ mkdir -p "$SCRIPT_DIR/target/native"
 
 # Compile JNI bridge
 print_info "Compiling KVTJNIBridge.cpp..."
-g++ -Wall -O2 -fPIC -std=c++11 \
+g++ -Wall -O2 -fPIC -std=c++17 \
     -I"$JAVA_HOME/include" \
     -I"$JAVA_HOME/include/linux" \
     -I"$SCRIPT_DIR/kvt" \

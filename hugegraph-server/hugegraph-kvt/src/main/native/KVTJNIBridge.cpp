@@ -587,36 +587,42 @@ void encodeVInt(size_t value, std::string& output) {
 }
 
 /*
- * Helper function to update vertex properties.
+ * Helper function to update vertex properties using the new KVT process interface.
  * This function deserializes the existing vertex data, merges in the new property,
  * and serializes it back.
  * 
  * Format expected:
- * - original_value: [id_bytes][column_data...]
- * - parameter: [property_key_len][property_key][property_value_len][property_value]
+ * - input.value: [id_bytes][column_data...]
+ * - input.parameter: [property_key_len][property_key][property_value_len][property_value]
  * 
  * Column format: [name_len_vint][name_bytes][value_len_vint][value_bytes]
  */
-std::tuple<bool, bool, bool> hg_update_vertex_property(
-    const KVTKey& key,
-    const std::string& original_value,
-    const std::string& parameter,
-    std::string& new_value,
-    std::string& result_value) {
+bool hg_update_vertex_property(
+    KVTProcessInput& input,
+    KVTProcessOutput& output) {
     
     try {
+        // Check required inputs
+        if (!input.value || !input.parameter) {
+            output.return_value = "Missing required input value or parameter";
+            return false;
+        }
+        
+        const std::string& original_value = *input.value;
+        const std::string& parameter = *input.parameter;
+        
         // If original value is empty, this is a new vertex (shouldn't happen for property update)
         if (original_value.empty()) {
-            result_value = "Cannot update property on non-existent vertex";
-            return std::make_tuple(false, false, false);
+            output.return_value = "Cannot update property on non-existent vertex";
+            return false;
         }
         
         // Parse the parameter to get the property update
         // Format: [property_name_len_vint][property_name][property_value_len_vint][property_value]
         size_t param_pos = 0;
         if (parameter.size() < 2) {
-            result_value = "Invalid property update parameter";
-            return std::make_tuple(false, false, false);
+            output.return_value = "Invalid property update parameter";
+            return false;
         }
         
         // Read property name length (variable int encoding)
@@ -626,8 +632,8 @@ std::tuple<bool, bool, bool> hg_update_vertex_property(
         param_pos += bytes_read;
         
         if (param_pos + prop_name_len > parameter.size()) {
-            result_value = "Invalid property name length";
-            return std::make_tuple(false, false, false);
+            output.return_value = "Invalid property name length";
+            return false;
         }
         
         std::string prop_name(parameter.data() + param_pos, prop_name_len);
@@ -635,16 +641,16 @@ std::tuple<bool, bool, bool> hg_update_vertex_property(
         
         // Read property value length
         if (param_pos >= parameter.size()) {
-            result_value = "Missing property value";
-            return std::make_tuple(false, false, false);
+            output.return_value = "Missing property value";
+            return false;
         }
         
         size_t prop_value_len = decodeVInt(param_data + param_pos, bytes_read);
         param_pos += bytes_read;
         
         if (param_pos + prop_value_len > parameter.size()) {
-            result_value = "Invalid property value length";
-            return std::make_tuple(false, false, false);
+            output.return_value = "Invalid property value length";
+            return false;
         }
         
         std::string prop_value(parameter.data() + param_pos, prop_value_len);
@@ -672,8 +678,9 @@ std::tuple<bool, bool, bool> hg_update_vertex_property(
             }
         }
         
+        // Build the new value
+        std::string new_value;
         // Copy ID bytes
-        new_value.clear();
         new_value.append(original_value.data(), id_end_pos);
         
         // Parse existing columns
@@ -726,12 +733,16 @@ std::tuple<bool, bool, bool> hg_update_vertex_property(
             new_value.append(col.second);
         }
         
-        result_value = "Vertex property updated successfully";
-        return std::make_tuple(true, true, true);
+        // Set outputs
+        output.update_value = new_value;
+        output.return_value = "Vertex property updated successfully";
+        output.delete_key = false;
+        
+        return true;
         
     } catch (const std::exception& e) {
-        result_value = std::string("Error updating property: ") + e.what();
-        return std::make_tuple(false, false, false);
+        output.return_value = std::string("Error updating property: ") + e.what();
+        return false;
     }
 }
 
@@ -748,16 +759,16 @@ extern "C" JNIEXPORT jobjectArray JNICALL Java_org_apache_hugegraph_backend_stor
     std::string resultValue;
     std::string errorMsg;
     
-    // Create the update function as std::function
-    KVUpdateFunc updateFunc = hg_update_vertex_property;
+    // Create the process function as KVTProcessFunc
+    KVTProcessFunc processFunc = hg_update_vertex_property;
     
-    // Call kvt_update with our custom function
+    // Call kvt_process with our custom function
     KVTKey kvtKey(keyStr);
-    KVTError error = kvt_update(
+    KVTError error = kvt_process(
         static_cast<uint64_t>(txId),
         static_cast<uint64_t>(tableId),
         kvtKey,
-        updateFunc,
+        processFunc,
         paramStr,
         resultValue,
         errorMsg);
@@ -778,34 +789,40 @@ extern "C" JNIEXPORT jobjectArray JNICALL Java_org_apache_hugegraph_backend_stor
 }
 
 /*
- * Helper function to update edge properties.
+ * Helper function to update edge properties using the new KVT process interface.
  * This function deserializes the existing edge data, merges in the new property,
  * and serializes it back.
  * 
  * Format expected:
- * - original_value: [id_bytes][property_data...]
- * - parameter: [property_key_len][property_key][property_value_len][property_value]
+ * - input.value: [id_bytes][property_data...]
+ * - input.parameter: [property_key_len][property_key][property_value_len][property_value]
  */
-std::tuple<bool, bool, bool> hg_update_edge_property(
-    const KVTKey& key,
-    const std::string& original_value,
-    const std::string& parameter,
-    std::string& new_value,
-    std::string& result_value) {
+bool hg_update_edge_property(
+    KVTProcessInput& input,
+    KVTProcessOutput& output) {
     
     try {
+        // Check required inputs
+        if (!input.value || !input.parameter) {
+            output.return_value = "Missing required input value or parameter";
+            return false;
+        }
+        
+        const std::string& original_value = *input.value;
+        const std::string& parameter = *input.parameter;
+        
         // If original value is empty, this is a new edge (shouldn't happen for property update)
         if (original_value.empty()) {
-            result_value = "Cannot update property on non-existent edge";
-            return std::make_tuple(false, false, false);
+            output.return_value = "Cannot update property on non-existent edge";
+            return false;
         }
         
         // Parse the parameter to get the property update
         // Format: [property_name_len_vint][property_name][property_value_len_vint][property_value]
         size_t param_pos = 0;
         if (parameter.size() < 2) {
-            result_value = "Invalid property update parameter";
-            return std::make_tuple(false, false, false);
+            output.return_value = "Invalid property update parameter";
+            return false;
         }
         
         // Read property name length (variable int encoding)
@@ -815,8 +832,8 @@ std::tuple<bool, bool, bool> hg_update_edge_property(
         param_pos += bytes_read;
         
         if (param_pos + prop_name_len > parameter.size()) {
-            result_value = "Invalid property name length";
-            return std::make_tuple(false, false, false);
+            output.return_value = "Invalid property name length";
+            return false;
         }
         
         std::string prop_name(parameter.data() + param_pos, prop_name_len);
@@ -824,16 +841,16 @@ std::tuple<bool, bool, bool> hg_update_edge_property(
         
         // Read property value length
         if (param_pos >= parameter.size()) {
-            result_value = "Missing property value";
-            return std::make_tuple(false, false, false);
+            output.return_value = "Missing property value";
+            return false;
         }
         
         size_t prop_value_len = decodeVInt(param_data + param_pos, bytes_read);
         param_pos += bytes_read;
         
         if (param_pos + prop_value_len > parameter.size()) {
-            result_value = "Invalid property value length";
-            return std::make_tuple(false, false, false);
+            output.return_value = "Invalid property value length";
+            return false;
         }
         
         std::string prop_value(parameter.data() + param_pos, prop_value_len);
@@ -861,8 +878,9 @@ std::tuple<bool, bool, bool> hg_update_edge_property(
             }
         }
         
+        // Build the new value
+        std::string new_value;
         // Copy ID bytes
-        new_value.clear();
         new_value.append(original_value.data(), id_end_pos);
         
         // Parse existing columns
@@ -915,12 +933,16 @@ std::tuple<bool, bool, bool> hg_update_edge_property(
             new_value.append(col.second);
         }
         
-        result_value = "Edge property updated successfully";
-        return std::make_tuple(true, true, true);
+        // Set outputs
+        output.update_value = new_value;
+        output.return_value = "Edge property updated successfully";
+        output.delete_key = false;
+        
+        return true;
         
     } catch (const std::exception& e) {
-        result_value = std::string("Error updating edge property: ") + e.what();
-        return std::make_tuple(false, false, false);
+        output.return_value = std::string("Error updating edge property: ") + e.what();
+        return false;
     }
 }
 
@@ -937,16 +959,16 @@ extern "C" JNIEXPORT jobjectArray JNICALL Java_org_apache_hugegraph_backend_stor
     std::string resultValue;
     std::string errorMsg;
     
-    // Create the update function as std::function
-    KVUpdateFunc updateFunc = hg_update_edge_property;
+    // Create the process function as KVTProcessFunc
+    KVTProcessFunc processFunc = hg_update_edge_property;
     
-    // Call kvt_update with our custom function
+    // Call kvt_process with our custom function
     KVTKey kvtKey(keyStr);
-    KVTError error = kvt_update(
+    KVTError error = kvt_process(
         static_cast<uint64_t>(txId),
         static_cast<uint64_t>(tableId),
         kvtKey,
-        updateFunc,
+        processFunc,
         paramStr,
         resultValue,
         errorMsg);
