@@ -68,16 +68,21 @@ public class KVTPushdownFunctions {
             buffer.writeVInt(conditions.size());
             
             for (Condition condition : conditions) {
+                if (!(condition instanceof Condition.Relation)) {
+                    continue; // Skip non-relation conditions
+                }
+                Condition.Relation relation = (Condition.Relation) condition;
+                
                 // Write property key
-                String key = condition.key().toString();
+                String key = relation.key().toString();
                 buffer.writeVInt(key.length());
                 buffer.writeBytes(key.getBytes());
                 
                 // Write relation type
-                buffer.writeByte((byte) condition.relation().ordinal());
+                buffer.write((byte) relation.relation().ordinal());
                 
                 // Write value
-                Object value = condition.value();
+                Object value = relation.value();
                 byte[] valueBytes = serializeValue(value);
                 buffer.writeVInt(valueBytes.length);
                 buffer.writeBytes(valueBytes);
@@ -89,20 +94,20 @@ public class KVTPushdownFunctions {
         private byte[] serializeValue(Object value) {
             BytesBuffer buffer = BytesBuffer.allocate(256);
             if (value instanceof String) {
-                buffer.writeByte((byte) 0); // String type
+                buffer.write((byte) 0); // String type
                 buffer.writeString((String) value);
             } else if (value instanceof Number) {
-                buffer.writeByte((byte) 1); // Number type
+                buffer.write((byte) 1); // Number type
                 buffer.writeDouble(((Number) value).doubleValue());
             } else if (value instanceof Boolean) {
-                buffer.writeByte((byte) 2); // Boolean type
+                buffer.write((byte) 2); // Boolean type
                 buffer.writeBoolean((Boolean) value);
             } else if (value instanceof Id) {
-                buffer.writeByte((byte) 3); // Id type
+                buffer.write((byte) 3); // Id type
                 buffer.writeId((Id) value);
             } else {
                 // Default to string representation
-                buffer.writeByte((byte) 0);
+                buffer.write((byte) 0);
                 buffer.writeString(value.toString());
             }
             return buffer.bytes();
@@ -271,7 +276,7 @@ public class KVTPushdownFunctions {
             buffer.writeBytes(groupByKey.getBytes());
             
             // Write aggregation type
-            buffer.writeByte((byte) aggregationType.ordinal());
+            buffer.write((byte) aggregationType.ordinal());
             
             // Write aggregate key (may be empty for COUNT)
             if (aggregateKey != null) {

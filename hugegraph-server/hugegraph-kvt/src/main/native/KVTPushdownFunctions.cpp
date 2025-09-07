@@ -23,10 +23,11 @@
 #include <numeric>
 #include <random>
 #include <sstream>
+#include <cstring>
 #include "../../../kvt/kvt_inc.h"
 
 // Helper function to decode variable-length integer (matching HugeGraph's format)
-size_t decodeVInt(const unsigned char* data, size_t& bytes_read) {
+static size_t decodeVInt(const unsigned char* data, size_t& bytes_read) {
     unsigned char leading = data[0];
     size_t value = leading & 0x7F;
     bytes_read = 1;
@@ -51,7 +52,7 @@ size_t decodeVInt(const unsigned char* data, size_t& bytes_read) {
 }
 
 // Helper function to encode variable-length integer
-void encodeVInt(size_t value, std::string& output) {
+static void encodeVInt(size_t value, std::string& output) {
     if (value > 0x0fffffff) {
         output.push_back(0x80 | ((value >> 28) & 0x7f));
     }
@@ -424,11 +425,17 @@ bool hg_topk_function(KVTProcessInput& input, KVTProcessOutput& output) {
             top_entries.emplace_back(sort_value, *input.value);
         } else {
             // Check if this entry should replace the worst entry
-            auto compare = ascending ? 
-                [](const auto& a, const auto& b) { return a.first < b.first; } :
-                [](const auto& a, const auto& b) { return a.first > b.first; };
-            
-            std::sort(top_entries.begin(), top_entries.end(), compare);
+            if (ascending) {
+                std::sort(top_entries.begin(), top_entries.end(),
+                    [](const std::pair<double, std::string>& a, const std::pair<double, std::string>& b) { 
+                        return a.first < b.first; 
+                    });
+            } else {
+                std::sort(top_entries.begin(), top_entries.end(),
+                    [](const std::pair<double, std::string>& a, const std::pair<double, std::string>& b) { 
+                        return a.first > b.first; 
+                    });
+            }
             
             if ((ascending && sort_value < top_entries.back().first) ||
                 (!ascending && sort_value > top_entries.back().first)) {
@@ -438,11 +445,17 @@ bool hg_topk_function(KVTProcessInput& input, KVTProcessOutput& output) {
         
         // Return top K on last entry
         if (input.range_last) {
-            auto compare = ascending ? 
-                [](const auto& a, const auto& b) { return a.first < b.first; } :
-                [](const auto& a, const auto& b) { return a.first > b.first; };
-            
-            std::sort(top_entries.begin(), top_entries.end(), compare);
+            if (ascending) {
+                std::sort(top_entries.begin(), top_entries.end(),
+                    [](const std::pair<double, std::string>& a, const std::pair<double, std::string>& b) { 
+                        return a.first < b.first; 
+                    });
+            } else {
+                std::sort(top_entries.begin(), top_entries.end(),
+                    [](const std::pair<double, std::string>& a, const std::pair<double, std::string>& b) { 
+                        return a.first > b.first; 
+                    });
+            }
             
             std::stringstream result;
             result << "[";

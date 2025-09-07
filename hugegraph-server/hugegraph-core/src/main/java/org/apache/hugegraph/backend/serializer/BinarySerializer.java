@@ -561,8 +561,8 @@ public class BinarySerializer extends AbstractSerializer {
         
         // Format the property update
         BytesBuffer buffer = BytesBuffer.allocate(64);
-        buffer.writeProperty(prop.key(), prop.value());
-        entry.column(HugeKeys.PROPERTIES, buffer.bytes());
+        buffer.writeProperty(prop.propertyKey(), prop.value());
+        entry.column(HugeKeys.PROPERTIES.string().getBytes(), buffer.bytes());
         
         return entry;
     }
