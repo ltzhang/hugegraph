@@ -21,7 +21,7 @@ CXXFLAGS := -Wall -O2 -fPIC -std=c++17
 INCLUDES := $(JNIFLAGS) -I../../../kvt
 
 # Source files
-SOURCES := KVTJNIBridge.cpp
+SOURCES := KVTJNIBridge.cpp KVTPushdownFunctions.cpp
 OBJECTS := $(SOURCES:.cpp=.o)
 
 # KVT library
