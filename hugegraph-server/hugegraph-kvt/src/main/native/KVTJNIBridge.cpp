@@ -988,3 +988,239 @@ extern "C" JNIEXPORT jobjectArray JNICALL Java_org_apache_hugegraph_backend_stor
     return result;
 }
 
+
+/*
+ * Class:     org_apache_hugegraph_backend_store_kvt_KVTNative
+ * Method:    nativeBatchGet
+ * Signature: (JJ[[B)[Ljava/lang/Object;
+ */
+extern "C" JNIEXPORT jobjectArray JNICALL Java_org_apache_hugegraph_backend_store_kvt_KVTNative_nativeBatchGet
+  (JNIEnv *env, jclass cls, jlong txId, jlong tableId, jobjectArray keys) {
+    
+    jsize numKeys = env->GetArrayLength(keys);
+    std::vector<KVTOp> batch_ops;
+    batch_ops.reserve(numKeys);
+    
+    // Build batch GET operations
+    for (jsize i = 0; i < numKeys; i++) {
+        jbyteArray keyArray = (jbyteArray) env->GetObjectArrayElement(keys, i);
+        std::string keyStr = ByteArrayToString(env, keyArray);
+        env->DeleteLocalRef(keyArray);
+        
+        KVTOp op;
+        op.op = OP_GET;
+        op.table_id = static_cast<uint64_t>(tableId);
+        op.key = KVTKey(keyStr);
+        batch_ops.push_back(op);
+    }
+    
+    // Execute batch operation
+    KVTBatchResults batch_results;
+    std::string errorMsg;
+    KVTError error = kvt_batch_execute(
+        static_cast<uint64_t>(txId),
+        batch_ops,
+        batch_results,
+        errorMsg);
+    
+    // Create result array: [errorCode, errorMsg, values[]]
+    jclass objectClass = env->FindClass("java/lang/Object");
+    jobjectArray result = env->NewObjectArray(3, objectClass, nullptr);
+    
+    jclass integerClass = env->FindClass("java/lang/Integer");
+    jmethodID intValueOf = env->GetStaticMethodID(integerClass, "valueOf", "(I)Ljava/lang/Integer;");
+    jobject errorCode = env->CallStaticObjectMethod(integerClass, intValueOf, static_cast<jint>(error));
+    
+    env->SetObjectArrayElement(result, 0, errorCode);
+    env->SetObjectArrayElement(result, 1, StringToJava(env, errorMsg));
+    
+    if (error == KVTError::SUCCESS || error == KVTError::BATCH_NOT_FULLY_SUCCESS) {
+        // Create byte array of values
+        jclass byteArrayClass = env->FindClass("[B");
+        jobjectArray values = env->NewObjectArray(numKeys, byteArrayClass, nullptr);
+        
+        for (jsize i = 0; i < numKeys && i < batch_results.size(); i++) {
+            if (batch_results[i].error == KVTError::SUCCESS) {
+                jbyteArray valueArray = StringToByteArray(env, batch_results[i].value);
+                env->SetObjectArrayElement(values, i, valueArray);
+                env->DeleteLocalRef(valueArray);
+            }
+        }
+        env->SetObjectArrayElement(result, 2, values);
+    }
+    
+    return result;
+}
+
+/*
+ * Class:     org_apache_hugegraph_backend_store_kvt_KVTNative
+ * Method:    nativeScanWithFilter
+ * Signature: (JJ[B[BI[B)[Ljava/lang/Object;
+ */
+extern "C" JNIEXPORT jobjectArray JNICALL Java_org_apache_hugegraph_backend_store_kvt_KVTNative_nativeScanWithFilter
+  (JNIEnv *env, jclass cls, jlong txId, jlong tableId, jbyteArray startKey, jbyteArray endKey, jint limit, jbyteArray filterParams) {
+    
+    std::string startKeyStr = ByteArrayToString(env, startKey);
+    std::string endKeyStr = ByteArrayToString(env, endKey);
+    std::string filterStr = ByteArrayToString(env, filterParams);
+    
+    // Create filter function
+    auto filterFunc = [&filterStr](KVTProcessInput& input, KVTProcessOutput& output) -> bool {
+        // Parse filter parameters
+        if (filterStr.empty()) {
+            // No filter, accept all
+            output.return_value = *input.value;
+            return true;
+        }
+        
+        // Apply filter logic here (simplified for now)
+        output.return_value = *input.value;
+        return true;
+    };
+    
+    // Execute range process with filter
+    std::vector<std::pair<KVTKey, std::string>> results;
+    std::string errorMsg;
+    
+    KVTKey kvtStartKey(startKeyStr);
+    KVTKey kvtEndKey(endKeyStr);
+    
+    KVTError error = kvt_range_process(
+        static_cast<uint64_t>(txId),
+        static_cast<uint64_t>(tableId),
+        kvtStartKey,
+        kvtEndKey,
+        static_cast<size_t>(limit),
+        filterFunc,
+        filterStr,
+        results,
+        errorMsg);
+    
+    // Create result array: [errorCode, errorMsg, KVTPair[]]
+    jclass objectClass = env->FindClass("java/lang/Object");
+    jobjectArray result = env->NewObjectArray(3, objectClass, nullptr);
+    
+    jclass integerClass = env->FindClass("java/lang/Integer");
+    jmethodID intValueOf = env->GetStaticMethodID(integerClass, "valueOf", "(I)Ljava/lang/Integer;");
+    jobject errorCode = env->CallStaticObjectMethod(integerClass, intValueOf, static_cast<jint>(error));
+    
+    env->SetObjectArrayElement(result, 0, errorCode);
+    env->SetObjectArrayElement(result, 1, StringToJava(env, errorMsg));
+    
+    if (error == KVTError::SUCCESS || error == KVTError::SCAN_LIMIT_REACHED) {
+        // Create KVTPair array
+        jclass kvtPairClass = env->FindClass("org/apache/hugegraph/backend/store/kvt/KVTNative$KVTPair");
+        jmethodID kvtPairConstructor = env->GetMethodID(kvtPairClass, "<init>", "([B[B)V");
+        jobjectArray pairs = env->NewObjectArray(results.size(), kvtPairClass, nullptr);
+        
+        for (size_t i = 0; i < results.size(); i++) {
+            jbyteArray keyBytes = StringToByteArray(env, std::string(results[i].first));
+            jbyteArray valueBytes = StringToByteArray(env, results[i].second);
+            jobject pair = env->NewObject(kvtPairClass, kvtPairConstructor, keyBytes, valueBytes);
+            env->SetObjectArrayElement(pairs, i, pair);
+            env->DeleteLocalRef(keyBytes);
+            env->DeleteLocalRef(valueBytes);
+            env->DeleteLocalRef(pair);
+        }
+        env->SetObjectArrayElement(result, 2, pairs);
+    }
+    
+    return result;
+}
+
+/*
+ * Class:     org_apache_hugegraph_backend_store_kvt_KVTNative
+ * Method:    nativeGetVertexEdges
+ * Signature: (JJ[BI[B)[Ljava/lang/Object;
+ */
+extern "C" JNIEXPORT jobjectArray JNICALL Java_org_apache_hugegraph_backend_store_kvt_KVTNative_nativeGetVertexEdges
+  (JNIEnv *env, jclass cls, jlong txId, jlong tableId, jbyteArray vertexId, jint direction, jbyteArray labelFilter) {
+    
+    std::string vertexIdStr = ByteArrayToString(env, vertexId);
+    std::string labelFilterStr = ByteArrayToString(env, labelFilter);
+    
+    // Build composite key prefix for edge scan
+    std::string keyPrefix = vertexIdStr;
+    if (direction == 0) keyPrefix += ":OUT:";
+    else if (direction == 1) keyPrefix += ":IN:";
+    else keyPrefix += ":";
+    
+    if (!labelFilterStr.empty()) {
+        keyPrefix += labelFilterStr + ":";
+    }
+    
+    // Scan for edges with prefix
+    KVTKey startKey(keyPrefix);
+    KVTKey endKey(keyPrefix + "\xFF");
+    
+    std::vector<std::pair<KVTKey, std::string>> results;
+    std::string errorMsg;
+    
+    auto edgeFunc = [](KVTProcessInput& input, KVTProcessOutput& output) -> bool {
+        output.return_value = *input.value;
+        return true;
+    };
+    
+    KVTError error = kvt_range_process(
+        static_cast<uint64_t>(txId),
+        static_cast<uint64_t>(tableId),
+        startKey,
+        endKey,
+        10000,
+        edgeFunc,
+        "",
+        results,
+        errorMsg);
+    
+    // Handle BOTH direction with second scan
+    if (direction == 2 && error == KVTError::SUCCESS) {
+        std::string keyPrefix2 = vertexIdStr + ":IN:";
+        if (!labelFilterStr.empty()) {
+            keyPrefix2 += labelFilterStr + ":";
+        }
+        
+        KVTKey startKey2(keyPrefix2);
+        KVTKey endKey2(keyPrefix2 + "\xFF");
+        std::vector<std::pair<KVTKey, std::string>> results2;
+        
+        KVTError error2 = kvt_range_process(
+            static_cast<uint64_t>(txId),
+            static_cast<uint64_t>(tableId),
+            startKey2,
+            endKey2,
+            10000,
+            edgeFunc,
+            "",
+            results2,
+            errorMsg);
+        
+        if (error2 == KVTError::SUCCESS) {
+            results.insert(results.end(), results2.begin(), results2.end());
+        }
+    }
+    
+    // Create result array
+    jclass objectClass = env->FindClass("java/lang/Object");
+    jobjectArray result = env->NewObjectArray(3, objectClass, nullptr);
+    
+    jclass integerClass = env->FindClass("java/lang/Integer");
+    jmethodID intValueOf = env->GetStaticMethodID(integerClass, "valueOf", "(I)Ljava/lang/Integer;");
+    jobject errorCode = env->CallStaticObjectMethod(integerClass, intValueOf, static_cast<jint>(error));
+    
+    env->SetObjectArrayElement(result, 0, errorCode);
+    env->SetObjectArrayElement(result, 1, StringToJava(env, errorMsg));
+    
+    if (error == KVTError::SUCCESS || error == KVTError::SCAN_LIMIT_REACHED) {
+        jclass byteArrayClass = env->FindClass("[B");
+        jobjectArray edges = env->NewObjectArray(results.size(), byteArrayClass, nullptr);
+        
+        for (size_t i = 0; i < results.size(); i++) {
+            jbyteArray edgeData = StringToByteArray(env, results[i].second);
+            env->SetObjectArrayElement(edges, i, edgeData);
+            env->DeleteLocalRef(edgeData);
+        }
+        env->SetObjectArrayElement(result, 2, edges);
+    }
+    
+    return result;
+}
