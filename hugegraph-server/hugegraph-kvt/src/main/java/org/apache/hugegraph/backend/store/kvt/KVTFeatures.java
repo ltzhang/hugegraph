@@ -152,4 +152,11 @@ public class KVTFeatures implements BackendFeatures {
         // Vertex property merging is supported
         return true;
     }
+    
+    @Override
+    public boolean supportsPersistence() {
+        // Current implementation is in-memory only (kvt_memory.o)
+        // This will return true when using a persistent KVT implementation
+        return false;
+    }
 }

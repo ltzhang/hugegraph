@@ -172,7 +172,7 @@ bool hg_count_aggregation(KVTProcessInput& input, KVTProcessOutput& output) {
         }
         
         // Return count on last entry
-        if (input.range_last) {
+        if (input.range_finished) {
             output.return_value = std::to_string(count);
         }
         
@@ -218,7 +218,7 @@ bool hg_sum_aggregation(KVTProcessInput& input, KVTProcessOutput& output) {
         sum += value;
         
         // Return sum on last entry
-        if (input.range_last) {
+        if (input.range_finished) {
             output.return_value = std::to_string(sum);
         }
         
@@ -272,7 +272,7 @@ bool hg_minmax_aggregation(KVTProcessInput& input, KVTProcessOutput& output) {
         }
         
         // Return result on last entry
-        if (input.range_last) {
+        if (input.range_finished) {
             output.return_value = std::to_string(extreme_value);
         }
         
@@ -352,7 +352,7 @@ bool hg_groupby_aggregation(KVTProcessInput& input, KVTProcessOutput& output) {
         }
         
         // Return results on last entry
-        if (input.range_last) {
+        if (input.range_finished) {
             std::stringstream result;
             result << "{";
             bool first = true;
@@ -444,7 +444,7 @@ bool hg_topk_function(KVTProcessInput& input, KVTProcessOutput& output) {
         }
         
         // Return top K on last entry
-        if (input.range_last) {
+        if (input.range_finished) {
             if (ascending) {
                 std::sort(top_entries.begin(), top_entries.end(),
                     [](const std::pair<double, std::string>& a, const std::pair<double, std::string>& b) { 

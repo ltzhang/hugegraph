@@ -54,12 +54,6 @@
             <artifactId>junit</artifactId>
             <scope>test</scope>
         </dependency>
-        <dependency>
-            <groupId>org.apache.hugegraph</groupId>
-            <artifactId>hugegraph-test</artifactId>
-            <version>${revision}</version>
-            <scope>test</scope>
-        </dependency>
     </dependencies>
 
     <build>

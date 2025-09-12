@@ -59,6 +59,23 @@
                 <include>*:*:jar:*</include>
             </includes>
         </dependencySet>
+        <!-- Extract native libraries from KVT jar -->
+        <dependencySet>
+            <outputDirectory>/lib</outputDirectory>
+            <unpack>true</unpack>
+            <scope>runtime</scope>
+            <useProjectArtifact>false</useProjectArtifact>
+            <includes>
+                <include>org.apache.hugegraph:hugegraph-kvt:jar:*</include>
+            </includes>
+            <unpackOptions>
+                <includes>
+                    <include>native/*.so</include>
+                    <include>native/*.dylib</include>
+                    <include>native/*.dll</include>
+                </includes>
+            </unpackOptions>
+        </dependencySet>
     </dependencySets>
 
 </assembly>

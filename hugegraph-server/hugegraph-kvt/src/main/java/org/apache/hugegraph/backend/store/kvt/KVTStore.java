@@ -67,9 +67,9 @@ public abstract class KVTStore extends AbstractBackendStore<KVTSession> {
         this.provider = provider;
         this.database = database;
         this.store = store;
-        this.tables = new HashMap<>();
+        this.tables = new ConcurrentHashMap<>();
         this.tableIdToName = new ConcurrentHashMap<>();
-        this.tableIds = new HashMap<>();
+        this.tableIds = new ConcurrentHashMap<>();
         this.opened = false;
         
         this.registerMetaHandlers();
@@ -86,6 +86,7 @@ public abstract class KVTStore extends AbstractBackendStore<KVTSession> {
     protected abstract void registerTableManagers();
     
     protected void registerTable(HugeType type, KVTTable table) {
+        LOG.debug("Registering table type {} for store '{}'", type, this.store);
         this.tables.put(type, table);
     }
     
@@ -130,10 +131,23 @@ public abstract class KVTStore extends AbstractBackendStore<KVTSession> {
         this.config = config;
         this.sessions = new KVTSessions(config, this.database, this.store);
         
-        LOG.info("Opening KVT store '{}' for database '{}'", 
-                this.store, this.database);
+        LOG.info("Opening KVT store '{}' for database '{}' (type: {})", 
+                this.store, this.database, this.getClass().getSimpleName());
+        
+        // For in-memory KVT, reset table IDs since tables don't persist
+        // This ensures tables will be recreated on init()
+        if (!this.features().supportsPersistence()) {
+            for (KVTTable table : this.tables.values()) {
+                table.setTableId(0);
+            }
+            this.tableIdToName.clear();
+        }
         
         this.opened = true;
+        
+        // Initialize tables after opening
+        // For in-memory KVT, tables need to be created every time we open
+        this.init();
     }
     
     @Override
@@ -238,6 +252,13 @@ public abstract class KVTStore extends AbstractBackendStore<KVTSession> {
             }
         }
         return true;
+    }
+    
+    @Override
+    public String storedVersion() {
+        // For in-memory KVT, return the driver version since there's no persistent storage
+        // When using a persistent KVT implementation, this should read the version from storage
+        return this.provider.driverVersion();
     }
     
     @Override
@@ -428,6 +449,12 @@ public abstract class KVTStore extends AbstractBackendStore<KVTSession> {
     
     @Override
     protected BackendTable<KVTSession, ?> table(HugeType type) {
+        // Ensure tables are initialized
+        if (this.tables.isEmpty()) {
+            LOG.warn("Tables not initialized for store '{}', initializing now", this.store);
+            this.ensureTablesInitialized();
+        }
+        
         KVTTable table = this.tables.get(type);
         
         // Special case: EDGE maps to EDGE_OUT
@@ -436,6 +463,8 @@ public abstract class KVTStore extends AbstractBackendStore<KVTSession> {
         }
         
         if (table == null) {
+            LOG.error("Table type {} not found. Available tables: {}", 
+                     type, this.tables.keySet());
             throw new BackendException("Unsupported table type: %s", type);
         }
         return table;
@@ -495,6 +524,7 @@ public abstract class KVTStore extends AbstractBackendStore<KVTSession> {
         
         @Override
         protected void registerTableManagers() {
+            LOG.info("Registering graph store tables for store '{}'", this.store());
             this.registerTable(HugeType.VERTEX,
                               new KVTTable(HugeType.VERTEX));
             this.registerTable(HugeType.EDGE_OUT,
@@ -537,6 +567,7 @@ public abstract class KVTStore extends AbstractBackendStore<KVTSession> {
         
         @Override
         protected void registerTableManagers() {
+            LOG.info("Registering system store tables for store '{}'", this.store());
             this.registerTable(HugeType.SYS_PROPERTY,
                               new KVTTable(HugeType.SYS_PROPERTY));
         }
