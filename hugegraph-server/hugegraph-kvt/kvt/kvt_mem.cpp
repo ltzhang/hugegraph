@@ -7,6 +7,10 @@
 std::unique_ptr<KVTWrapper> g_kvt_manager;
 int g_verbosity = 0;
 int g_sanity_check_level = 0;
+bool g_persist = false;
+bool g_do_fsync = false;
+size_t g_log_size_limit = 16 * 1024 * 1024;
+size_t g_keep_history_count = 5;
 
 KVTError kvt_set_verbosity(int verbosity) {
     g_verbosity = verbosity;
@@ -18,10 +22,14 @@ KVTError kvt_set_sanity_check_level(int level) {
     return KVTError::SUCCESS;
 }
 
-void kvt_set_persist_param(bool persist, size_t log_size_limit, size_t keep_history_count, bool text_log) {
-    if (g_kvt_manager) 
-        g_kvt_manager->set_persist_params(persist, false, log_size_limit, 
-                            keep_history_count, text_log); // fsync is always false for now
+void kvt_set_persist_param(size_t log_size_limit, size_t keep_history_count) {
+    g_log_size_limit = log_size_limit;
+    g_keep_history_count = keep_history_count;
+}
+
+void kvt_set_persist(bool persist, bool do_fsync) {
+    g_persist = persist;
+    g_do_fsync = do_fsync;
 }
 
 // Global KVT interface functions
@@ -45,6 +53,12 @@ KVTError kvt_initialize() {
         const char* sanity_check_level = getenv("KVT_SANITY_CHECK_LEVEL");
         if (sanity_check_level) {
             g_sanity_check_level = atoi(sanity_check_level);
+        }
+        //read from environment variable KVT_VERBOSITY
+        const char* persist = getenv("KVT_PERSIST");
+        if (persist) {
+            std::string persist_str(persist);
+            g_persist = (persist_str == "True" || persist_str == "1" || persist_str == "true" || persist_str == "TRUE");
         }
         return KVTError::SUCCESS;
     } catch (const std::exception& e) {
@@ -138,7 +152,7 @@ KVTError kvt_start_transaction(uint64_t& tx_id, std::string& error_msg) {
 KVTError kvt_get(uint64_t tx_id, uint64_t table_id, const KVTKey& key, 
              std::string& value, std::string& error_msg) {
     VERBOSE(std::cout << "kvt_get: tx_id=" << tx_id << ", table_id=" << table_id << ", key=" << key);
-    KVTError result = kvt_manager().get(tx_id, table_id, key, value, error_msg);
+    KVTError result = kvt_manager().do_get(tx_id, table_id, key, value, error_msg);
     VERBOSE(
         if (result != KVTError::SUCCESS)
             std::cout << " -> ERROR: " << error_msg << std::endl;
@@ -178,7 +192,7 @@ KVTError kvt_scan(uint64_t tx_id, uint64_t table_id, const KVTKey& key_start,
               const KVTKey& key_end, size_t num_item_limit, 
               std::vector<std::pair<KVTKey, std::string>>& results, std::string& error_msg) {
     VERBOSE(std::cout << "kvt_scan: tx_id=" << tx_id << ", table_id=" << table_id << ", key_start=" << key_start << ", key_end=" << key_end << ", limit=" << num_item_limit);
-    KVTError result = kvt_manager().scan(tx_id, table_id, key_start, key_end, num_item_limit, results, error_msg);
+    KVTError result = kvt_manager().do_scan(tx_id, table_id, key_start, key_end, num_item_limit, results, error_msg);
     VERBOSE(
         if (result != KVTError::SUCCESS)
             std::cout << " -> ERROR: " << error_msg << std::endl;
@@ -197,7 +211,7 @@ KVTError kvt_process(uint64_t tx_id,
                         std::string& error_msg) 
 {
     VERBOSE(std::cout << "kvt_process: tx_id=" << tx_id << ", table_id=" << table_id << ", key=" << key);
-    KVTError result = kvt_manager().process(tx_id, table_id, key, func, parameter, return_value, error_msg);
+    KVTError result = kvt_manager().do_process(tx_id, table_id, key, func, parameter, return_value, error_msg);
     VERBOSE(
         if (result != KVTError::SUCCESS)
             std::cout << " -> ERROR: " << error_msg << std::endl;
@@ -218,7 +232,7 @@ KVTError kvt_range_process(uint64_t tx_id,
                             std::string& error_msg)
 {
     VERBOSE(std::cout << "kvt_range_process: tx_id=" << tx_id << ", table_id=" << table_id << ", key_start=" << key_start << ", key_end=" << key_end << ", limit=" << num_item_limit);
-    KVTError result = kvt_manager().range_process(tx_id, table_id, key_start, key_end, num_item_limit, func, parameter, results, error_msg);
+    KVTError result = kvt_manager().do_range_process(tx_id, table_id, key_start, key_end, num_item_limit, func, parameter, results, error_msg);
     VERBOSE(
         if (result != KVTError::SUCCESS)
             std::cout << " -> ERROR: " << error_msg << std::endl;
@@ -1134,6 +1148,7 @@ KVTError KVTMemManagerOCC::commit_transaction(uint64_t tx_id, std::string& error
         }
     }
     //now all readset versions are valid, so we can install the new values
+    uint64_t new_version = next_tx_id++; //use this as the commit timestamp
     for (const auto& delete_item : tx->delete_set) {
         auto [table_id_parsed, key] = parse_table_key(delete_item);
         Table* table = get_table_by_id(table_id_parsed);
@@ -1146,9 +1161,7 @@ KVTError KVTMemManagerOCC::commit_transaction(uint64_t tx_id, std::string& error
         auto [table_id_parsed, key] = parse_table_key(write_pair.first);
         Table* table = get_table_by_id(table_id_parsed);
         assert(table);
-        
-        std::string old_value = (table->data.find(key) != table->data.end()) ? table->data[key].data : "NEW";
-        uint64_t new_version = (table->data.find(key) != table->data.end()) ? table->data[key].metadata + 1 : 1;
+        //use commit timestamp as the versiond
         table->data[key] = Entry(write_pair.second.data, static_cast<int32_t>(new_version));
         
     }
@@ -1230,12 +1243,7 @@ KVTError KVTMemManagerOCC::get(uint64_t tx_id, uint64_t table_id, const KVTKey& 
                 error_msg = "Table with ID " + std::to_string(table_id) + " not found";
                 return KVTError::TABLE_NOT_FOUND;
             }
-            if (table->data.find(key) == table->data.end()) {
-                table->data[key] = Entry(value,1);
-            }
-            else {
-                table->data[key] = Entry(value,table->data[key].metadata + 1);
-            }
+            table->data[key] = Entry(value, next_tx_id++);
             return KVTError::SUCCESS;
         }
         Transaction* tx = get_transaction(tx_id);
@@ -1346,13 +1354,7 @@ KVTError KVTMemManagerOCC::scan(uint64_t tx_id, uint64_t table_id, const KVTKey&
             tx->read_set[table_key] = itr->second;
             results_table[itr->first] = itr->second.data;
         } else {
-            if (tx->read_set[table_key].data != itr->second.data) {
-                //if my value is not the same as the table, table value is newer, so my version must be older
-                //actually we should abort here, but we just assert for now. since we are not supposed to
-                //read from table in real implementations. 
-                assert (tx->read_set[table_key].metadata < itr->second.metadata);
-            }
-            results_table[itr->first] = tx->read_set[table_key].data; //should be the same, if not, then we will abort anyway.
+            results_table[itr->first] = tx->read_set[table_key].data; 
         }
         if (results_table.size() >= num_item_limit) {
             break;
