@@ -130,6 +130,11 @@ public abstract class KVTStore extends AbstractBackendStore<KVTSession> {
         
         this.config = config;
         this.sessions = new KVTSessions(config, this.database, this.store);
+        try {
+            this.sessions.open();
+        } catch (Exception e) {
+            throw new BackendException("Failed to open KVT sessions", e);
+        }
         
         LOG.info("Opening KVT store '{}' for database '{}' (type: {})", 
                 this.store, this.database, this.getClass().getSimpleName());
@@ -429,17 +434,15 @@ public abstract class KVTStore extends AbstractBackendStore<KVTSession> {
                 this.counterTableId = result.value;
                 LOG.info("Created counter table '{}' with ID {}", counterTableName, result.value);
             } else if (result.error == KVTNative.KVTError.TABLE_ALREADY_EXISTS) {
-                // Table exists, but we need to find its ID
-                // For simplicity, we'll use a fixed ID based on store type
-                // Schema store: 100, Graph store: 200, System store: 300
-                if (this.isSchemaStore()) {
-                    this.counterTableId = 100L;
-                } else if (this.store.equals("g")) {
-                    this.counterTableId = 200L;
+                // Table exists, resolve its real ID
+                Object[] idResult = KVTNative.nativeGetTableId(counterTableName);
+                if ((Integer) idResult[0] == 0) { // SUCCESS
+                    this.counterTableId = (Long) idResult[1];
+                    LOG.debug("Counter table already exists, resolved ID {}", this.counterTableId);
                 } else {
-                    this.counterTableId = 300L;
+                    throw new BackendException("Failed to resolve counter table ID for %s: %s",
+                                               counterTableName, idResult[2]);
                 }
-                LOG.debug("Counter table already exists, using ID {}", this.counterTableId);
             } else {
                 throw new BackendException("Failed to create counter table: " + result.error);
             }

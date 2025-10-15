@@ -24,6 +24,14 @@
 #include "org_apache_hugegraph_backend_store_kvt_KVTNative.h"
 #include "../../../kvt/kvt_inc.h"
 
+// Forward declarations for pushdown functions implemented in KVTPushdownFunctions.cpp
+bool hg_property_filter(KVTProcessInput& input, KVTProcessOutput& output);
+bool hg_sum_aggregation(KVTProcessInput& input, KVTProcessOutput& output);
+bool hg_minmax_aggregation(KVTProcessInput& input, KVTProcessOutput& output);
+bool hg_groupby_aggregation(KVTProcessInput& input, KVTProcessOutput& output);
+bool hg_topk_function(KVTProcessInput& input, KVTProcessOutput& output);
+bool hg_sampling_function(KVTProcessInput& input, KVTProcessOutput& output);
+
 // Helper function to convert Java string to C++ string
 std::string JavaToString(JNIEnv* env, jstring jstr) {
     if (jstr == nullptr) {
@@ -1064,19 +1072,8 @@ extern "C" JNIEXPORT jobjectArray JNICALL Java_org_apache_hugegraph_backend_stor
     std::string endKeyStr = ByteArrayToString(env, endKey);
     std::string filterStr = ByteArrayToString(env, filterParams);
     
-    // Create filter function
-    auto filterFunc = [&filterStr](KVTProcessInput& input, KVTProcessOutput& output) -> bool {
-        // Parse filter parameters
-        if (filterStr.empty()) {
-            // No filter, accept all
-            output.return_value = *input.value;
-            return true;
-        }
-        
-        // Apply filter logic here (simplified for now)
-        output.return_value = *input.value;
-        return true;
-    };
+    // Use the property filter pushdown function implemented in KVTPushdownFunctions.cpp
+    KVTProcessFunc filterFunc = hg_property_filter;
     
     // Execute range process with filter
     std::vector<std::pair<KVTKey, std::string>> results;
@@ -1126,6 +1123,90 @@ extern "C" JNIEXPORT jobjectArray JNICALL Java_org_apache_hugegraph_backend_stor
     }
     
     return result;
+}
+
+/*
+ * Class:     org_apache_hugegraph_backend_store_kvt_KVTNative
+ * Method:    nativeAggregateRange
+ * Signature: (JJ[B[BII[B)[Ljava/lang/Object;
+ * Parameters:
+ *  txId, tableId, startKey, endKey, limit, aggType, aggParams
+ * Returns: [errorCode, errorMsg, resultBytes]
+ */
+extern "C" JNIEXPORT jobjectArray JNICALL Java_org_apache_hugegraph_backend_store_kvt_KVTNative_nativeAggregateRange
+  (JNIEnv *env, jclass cls, jlong txId, jlong tableId, jbyteArray startKey, jbyteArray endKey,
+   jint limit, jint aggType, jbyteArray aggParams) {
+
+    std::string startKeyStr = ByteArrayToString(env, startKey);
+    std::string endKeyStr = ByteArrayToString(env, endKey);
+    std::string paramStr = ByteArrayToString(env, aggParams);
+
+    KVTKey kvtStartKey(startKeyStr);
+    KVTKey kvtEndKey(endKeyStr);
+
+    // Select pushdown function based on aggType
+    KVTProcessFunc func;
+    // 0: COUNT, 1: SUM, 2: MIN, 3: MAX, 4: GROUPBY, 5: TOPK, 6: SAMPLE
+    // NOTE: AVG can be expressed via GROUPBY with counts, keep simple for now
+    static auto countFunc = [](KVTProcessInput& input, KVTProcessOutput& output) -> bool {
+        static uint64_t count = 0;
+        if (input.range_first) count = 0;
+        if (!input.range_finished) {
+            // Count this item
+            count++;
+        }
+        if (input.range_finished) {
+            output.return_value = std::to_string(count);
+        }
+        return true;
+    };
+
+    switch (aggType) {
+        case 0: func = countFunc; break;                 // COUNT
+        case 1: func = hg_sum_aggregation; break;        // SUM
+        case 2: func = hg_minmax_aggregation; break;     // MIN (param decides)
+        case 3: func = hg_minmax_aggregation; break;     // MAX (param decides)
+        case 4: func = hg_groupby_aggregation; break;    // GROUPBY
+        case 5: func = hg_topk_function; break;          // TOPK
+        case 6: func = hg_sampling_function; break;      // SAMPLE
+        default: func = countFunc; break;
+    }
+
+    std::vector<std::pair<KVTKey, std::string>> results; // Unused by aggregation functions that return final value via return_value at end
+    std::string errorMsg;
+    KVTError error = kvt_range_process(
+        static_cast<uint64_t>(txId),
+        static_cast<uint64_t>(tableId),
+        kvtStartKey,
+        kvtEndKey,
+        static_cast<size_t>(limit),
+        func,
+        paramStr,
+        results,
+        errorMsg);
+
+    // If function returns via return_value on final call, encode it into a single bytes result
+    std::string finalValue;
+    if (!results.empty()) {
+        // Some functions may push results via results vector (e.g., sampling/topk). Concatenate as JSON-like lines
+        // Default: join values with newline
+        for (size_t i = 0; i < results.size(); i++) {
+            if (i > 0) finalValue.push_back('\n');
+            finalValue.append(results[i].second);
+        }
+    }
+
+    jclass objectClass = env->FindClass("java/lang/Object");
+    jobjectArray jresult = env->NewObjectArray(3, objectClass, nullptr);
+
+    jclass integerClass = env->FindClass("java/lang/Integer");
+    jmethodID intValueOf = env->GetStaticMethodID(integerClass, "valueOf", "(I)Ljava/lang/Integer;");
+    jobject errorCode = env->CallStaticObjectMethod(integerClass, intValueOf, static_cast<jint>(error));
+
+    env->SetObjectArrayElement(jresult, 0, errorCode);
+    env->SetObjectArrayElement(jresult, 1, StringToJava(env, errorMsg));
+    env->SetObjectArrayElement(jresult, 2, StringToByteArray(env, finalValue));
+    return jresult;
 }
 
 /*

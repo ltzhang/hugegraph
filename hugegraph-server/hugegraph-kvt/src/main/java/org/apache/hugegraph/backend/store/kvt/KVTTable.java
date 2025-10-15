@@ -38,6 +38,7 @@ import org.apache.hugegraph.backend.serializer.BytesBuffer;
 import org.apache.hugegraph.backend.store.BackendEntry;
 import org.apache.hugegraph.backend.store.BackendTable;
 import org.apache.hugegraph.backend.store.Shard;
+import org.apache.hugegraph.exception.NotSupportException;
 import org.apache.hugegraph.iterator.MapperIterator;
 import org.apache.hugegraph.type.HugeType;
 import org.apache.hugegraph.util.E;
@@ -74,6 +75,15 @@ public class KVTTable extends BackendTable<KVTSession, BackendEntry> {
         this.tableId = 0;
         this.cacheEnabled = enableCache;
         this.cache = enableCache ? new KVTQueryCache() : null;
+    }
+
+    private static byte[] concat(byte[] a, byte[] b) {
+        if (a == null || a.length == 0) return b;
+        if (b == null || b.length == 0) return a;
+        byte[] r = new byte[a.length + b.length];
+        System.arraycopy(a, 0, r, 0, a.length);
+        System.arraycopy(b, 0, r, a.length, b.length);
+        return r;
     }
     
     @Override
@@ -156,17 +166,8 @@ public class KVTTable extends BackendTable<KVTSession, BackendEntry> {
         
         // Serialize the entry with ID and columns
         BytesBuffer buffer = BytesBuffer.allocate(0);
-        
-        // Write ID in the proper BinaryBackendEntry format
-        if (entry instanceof BinaryBackendEntry) {
-            BinaryBackendEntry bEntry = (BinaryBackendEntry) entry;
-            BinaryId bid = bEntry.id();
-            buffer.write(bid.asBytes());
-        } else {
-            // For non-binary entries, convert ID to bytes
-            byte[] idBytes = KVTIdUtil.idToBytes(this.type, entry.id());
-            buffer.write(idBytes);
-        }
+        // Always write canonical ID bytes matching key encoding
+        buffer.write(key);
         
         // Write columns with length prefixes for proper parsing
         for (BackendEntry.BackendColumn column : entry.columns()) {
@@ -322,14 +323,14 @@ public class KVTTable extends BackendTable<KVTSession, BackendEntry> {
                 return cached;
             }
         }
-        
+
         // Optimize query
         KVTQueryOptimizer.QueryPlan plan = 
             KVTQueryOptimizer.optimize(query, this.type);
-        
+
         // Execute query based on plan - following RocksDB pattern
         Iterator<BackendEntry> result;
-        
+
         // Query by prefix - optimized scan
         if (query instanceof IdPrefixQuery) {
             result = this.queryByPrefix(session, (IdPrefixQuery) query);
@@ -340,7 +341,16 @@ public class KVTTable extends BackendTable<KVTSession, BackendEntry> {
         }
         // Query by specific IDs
         else if (query instanceof IdQuery) {
-            result = this.queryById(session, (IdQuery) query);
+            // Route based on optimizer decision to enable batch-get when suggested
+            KVTQueryOptimizer.Strategy strategy = plan.strategy;
+            if (strategy == KVTQueryOptimizer.Strategy.DIRECT_GET) {
+                result = this.queryByIdDirect(session, (IdQuery) query);
+            } else if (strategy == KVTQueryOptimizer.Strategy.BATCH_GET) {
+                result = this.queryByIdBatch(session, (IdQuery) query);
+            } else {
+                // Fallback: use batch path for multiple IDs
+                result = this.queryByIdBatch(session, (IdQuery) query);
+            }
         }
         // Query with conditions
         else if (query instanceof ConditionQuery) {
@@ -367,21 +377,55 @@ public class KVTTable extends BackendTable<KVTSession, BackendEntry> {
         
         return result;
     }
-    
-    private Iterator<BackendEntry> queryById(KVTSession session, IdQuery query) {
+
+    private Iterator<BackendEntry> queryByIdDirect(KVTSession session, IdQuery query) {
         List<BackendEntry> entries = new ArrayList<>();
-        
         for (Id id : query.ids()) {
             byte[] key = KVTIdUtil.idToBytes(this.type, id);
             byte[] value = session.get(this.tableId, key);
-            
             if (value != null) {
-                // Parse the stored value to reconstruct the entry
-                BinaryBackendEntry entry = parseStoredEntry(id, value);
-                entries.add(entry);
+                entries.add(parseStoredEntry(id, value));
             }
         }
-        
+        return entries.iterator();
+    }
+
+    private static final int DEFAULT_BATCH_GET_CHUNK = 1024;
+
+    private Iterator<BackendEntry> queryByIdBatch(KVTSession session, IdQuery query) {
+        List<BackendEntry> entries = new ArrayList<>();
+
+        int total = query.ids().size();
+        if (total == 0) {
+            return entries.iterator();
+        }
+
+        // Prepare arrays to enable chunked batch-get
+        Id[] ids = new Id[total];
+        byte[][] keys = new byte[total][];
+        int i = 0;
+        for (Id id : query.ids()) {
+            ids[i] = id;
+            keys[i] = KVTIdUtil.idToBytes(this.type, id);
+            i++;
+        }
+
+        // Chunk the request to avoid oversized JNI arrays
+        int chunkSize = DEFAULT_BATCH_GET_CHUNK;
+        for (int offset = 0; offset < total; offset += chunkSize) {
+            int len = Math.min(chunkSize, total - offset);
+            byte[][] subKeys = new byte[len][];
+            System.arraycopy(keys, offset, subKeys, 0, len);
+
+            byte[][] values = session.batchGet(this.tableId, subKeys);
+
+            for (int j = 0; j < len; j++) {
+                byte[] value = values != null && j < values.length ? values[j] : null;
+                if (value != null) {
+                    entries.add(parseStoredEntry(ids[offset + j], value));
+                }
+            }
+        }
         return entries.iterator();
     }
     
@@ -389,18 +433,19 @@ public class KVTTable extends BackendTable<KVTSession, BackendEntry> {
      * Query by prefix - optimized prefix scan following RocksDB pattern
      */
     private Iterator<BackendEntry> queryByPrefix(KVTSession session, IdPrefixQuery query) {
-        // Calculate scan range based on prefix
-        byte[] prefix = query.prefix().asBytes();
-        byte[] start = query.start().asBytes();
-        
-        // If start is not at the beginning of prefix, use it; otherwise use prefix
-        if (!Arrays.equals(start, prefix)) {
-            // Start is specified separately from prefix
-            start = start;
+        // Build full type-prefixed prefix and range
+        byte[] typePrefix = KVTIdUtil.typePrefix(this.type);
+        byte[] prefixSuffix = query.prefix().asBytes();
+        byte[] fullPrefix = concat(typePrefix, prefixSuffix);
+        byte[] start;
+        if (query.start() != null) {
+            // Start is a concrete ID within the prefix scope
+            start = KVTIdUtil.idToBytes(this.type, query.start());
+        } else {
+            // Start at the beginning of the prefix range
+            start = fullPrefix;
         }
-        
-        // End key is prefix + max value to scan entire prefix range
-        byte[] end = KVTIdUtil.prefixEnd(prefix);
+        byte[] end = KVTIdUtil.prefixEnd(fullPrefix);
         
         int limit = query.limit() == Query.NO_LIMIT ? 
                    Integer.MAX_VALUE : (int) query.limit();
@@ -420,8 +465,8 @@ public class KVTTable extends BackendTable<KVTSession, BackendEntry> {
      * Query by range - optimized range scan following RocksDB pattern
      */
     private Iterator<BackendEntry> queryByRange(KVTSession session, IdRangeQuery query) {
-        byte[] start = query.start().asBytes();
-        byte[] end = query.end() == null ? null : query.end().asBytes();
+        byte[] start = KVTIdUtil.idToBytes(this.type, query.start());
+        byte[] end = query.end() == null ? null : KVTIdUtil.idToBytes(this.type, query.end());
         
         // Adjust for inclusive/exclusive boundaries
         if (!query.inclusiveStart() && start != null) {
@@ -454,10 +499,8 @@ public class KVTTable extends BackendTable<KVTSession, BackendEntry> {
         if (this.rangePartitioned && query.hasRangeCondition()) {
             return this.queryByRangeCondition(session, query);
         }
-        
-        // For other queries, we need to scan
-        // This is inefficient and should be optimized with indexes
-        return this.scanTable(session, query);
+        // Otherwise not supported (avoid incorrect superset results)
+        throw new NotSupportException("query: %s", query);
     }
     
     private Iterator<BackendEntry> queryByRangeCondition(KVTSession session, 
@@ -466,20 +509,20 @@ public class KVTTable extends BackendTable<KVTSession, BackendEntry> {
         KVTQueryTranslator.ScanRange range = 
             KVTQueryTranslator.translateToScan(query, this.type);
         
-        int limit = query.limit() == Query.NO_LIMIT ? 
-                   Integer.MAX_VALUE : (int) query.limit();
-        
-        Iterator<KVTNative.KVTPair> pairs = 
-            session.scan(this.tableId, range.startKey, range.endKey, limit);
-        
-        Iterator<BackendEntry> entries = new MapperIterator<>(pairs, pair -> {
-            // Parse the stored value to reconstruct the entry
+        int limit = query.limit() == Query.NO_LIMIT ? Integer.MAX_VALUE : (int) query.limit();
+
+        Iterator<KVTNative.KVTPair> pairs;
+        if (range.hasFilters()) {
+            byte[] filterParams = buildFilterParams(range.filterConditions);
+            pairs = session.scanWithFilter(this.tableId, range.startKey, range.endKey, limit, filterParams);
+        } else {
+            pairs = session.scan(this.tableId, range.startKey, range.endKey, limit);
+        }
+
+        return new MapperIterator<>(pairs, pair -> {
             Id id = KVTIdUtil.bytesToId(pair.key);
             return parseStoredEntry(id, pair.value);
         });
-        
-        // Apply filter conditions if any
-        return KVTQueryTranslator.applyFilters(entries, range.filterConditions);
     }
     
     private Iterator<BackendEntry> scanTable(KVTSession session, Query query) {
@@ -514,16 +557,7 @@ public class KVTTable extends BackendTable<KVTSession, BackendEntry> {
             // The ID was already parsed from the key, so we need to skip the ID bytes in the value
             
             // Determine ID size to skip based on the type
-            int idBytesLength = 0;
-            if (id instanceof BinaryId) {
-                BinaryId bid = (BinaryId) id;
-                idBytesLength = bid.asBytes().length;
-            } else {
-                // For non-binary IDs, we need to determine the serialized size
-                // This depends on the HugeType and ID format
-                byte[] idBytes = KVTIdUtil.idToBytes(this.type, id);
-                idBytesLength = idBytes.length;
-            }
+            int idBytesLength = KVTIdUtil.idToBytes(this.type, id).length;
             
             // Skip the ID bytes that are at the beginning of the value
             if (idBytesLength > 0 && buffer.remaining() >= idBytesLength) {
@@ -607,13 +641,24 @@ public class KVTTable extends BackendTable<KVTSession, BackendEntry> {
     
     @Override
     public Number queryNumber(KVTSession session, Query query) {
-        // Count query - can be optimized in the future
-        long count = 0;
-        Iterator<BackendEntry> iter = this.query(session, query);
-        while (iter.hasNext()) {
-            iter.next();
-            count++;
+        // Prefer pushdown COUNT aggregation when possible
+        try {
+            KVTQueryTranslator.ScanRange range = KVTQueryTranslator.translateToScan(query, this.type);
+            byte[] startKey = range.startKey != null ? range.startKey : KVTIdUtil.scanStartKey(this.type, null);
+            byte[] endKey = range.endKey != null ? range.endKey : KVTIdUtil.scanEndKey(this.type, null);
+            int limit = query.limit() == Query.NO_LIMIT ? Integer.MAX_VALUE : (int) query.limit();
+            byte[] result = session.aggregateRange(this.tableId, startKey, endKey, limit, 0 /* COUNT */, new byte[0]);
+            if (result != null && result.length > 0) {
+                String s = new String(result);
+                return Long.parseLong(s.trim());
+            }
+        } catch (Throwable ignored) {
+            // Fallback below
         }
+
+        long count = 0L;
+        Iterator<BackendEntry> iter = this.query(session, query);
+        while (iter.hasNext()) { iter.next(); count++; }
         return count;
     }
     
@@ -671,5 +716,47 @@ public class KVTTable extends BackendTable<KVTSession, BackendEntry> {
      */
     public KVTQueryCache.CacheStatistics getCacheStatistics() {
         return this.cache != null ? this.cache.getStatistics() : null;
+    }
+
+    // Build a minimal filter parameter blob for native property filter pushdown
+    // Encoding: [num_conditions vInt] repeated { [key_len vInt][key][relation 1B][val_len vInt][value] }
+    private byte[] buildFilterParams(List<Condition> conditions) {
+        // Collect relation conditions only
+        List<Condition.Relation> rels = new ArrayList<>();
+        for (Condition c : conditions) {
+            if (c instanceof Condition.Relation) {
+                rels.add((Condition.Relation) c);
+            }
+        }
+        BytesBuffer buf = BytesBuffer.allocate(64);
+        buf.writeVInt(rels.size());
+        for (Condition.Relation r : rels) {
+            String keyStr = String.valueOf(r.key());
+            byte[] keyBytes = keyStr.getBytes();
+            buf.writeVInt(keyBytes.length);
+            buf.write(keyBytes);
+            buf.write(relationCode(r));
+            String valStr = String.valueOf(r.value());
+            byte[] valBytes = valStr.getBytes();
+            buf.writeVInt(valBytes.length);
+            buf.write(valBytes);
+        }
+        return buf.bytes();
+    }
+
+    private byte relationCode(Condition.Relation r) {
+        switch (r.relation()) {
+            case EQ: return 1;
+            case IN: return 2;
+            case GT: return 3;
+            case GTE: return 4;
+            case LT: return 5;
+            case LTE: return 6;
+            case CONTAINS: return 7;
+            case CONTAINS_KEY: return 8;
+            case CONTAINS_VALUE: return 9;
+            case NEQ: return 10;
+            default: return 0;
+        }
     }
 }

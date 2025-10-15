@@ -221,14 +221,27 @@ class KVTWrapper
         std::string file_name_separator_ = "_";
 
         std::string get_checkpoint_name(size_t check_point_id) {
-            return data_path_ + check_point_name_base_ + file_name_separator_  + std::to_string(check_point_id);
+            //make a 5 digit string
+            std::string check_point_id_str = std::to_string(check_point_id);
+            while (check_point_id_str.length() < 5) {
+                check_point_id_str = "0" + check_point_id_str;
+            }
+            return data_path_ + check_point_name_base_ + file_name_separator_  + check_point_id_str;
         }
 
         std::string get_logfile_name(size_t log_id) {
-            return data_path_ + log_file_name_base_ + file_name_separator_ + std::to_string(log_id);
+            //make a 5 digit string
+            std::string log_id_str = std::to_string(log_id);
+            while (log_id_str.length() < 5) {
+                log_id_str = "0" + log_id_str;
+            }
+            return data_path_ + log_file_name_base_ + file_name_separator_ + log_id_str;
         }
 
         size_t get_checkpoint_id_from_file_name(std::string file_name) {
+            if (file_name.find_last_of(file_name_separator_) == std::string::npos) {
+                return 0;
+            }
             return std::stoull(file_name.substr(file_name.find_last_of(file_name_separator_) + 1));
         }
 

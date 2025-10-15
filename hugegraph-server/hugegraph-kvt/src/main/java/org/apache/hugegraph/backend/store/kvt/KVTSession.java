@@ -160,26 +160,15 @@ public class KVTSession extends BackendSession.AbstractBackendSession {
      * Get a value from KVT
      */
     public byte[] get(long tableId, byte[] key) {
-        // Debug logging
-        System.out.println("[KVT-DEBUG] GET operation:");
-        System.out.println("  - Table ID: " + tableId);
-        System.out.println("  - Key (hex): " + bytesToHex(key));
-        System.out.println("  - Key (string): " + tryAsString(key));
-        
         KVTNative.KVTResult<byte[]> result = 
             KVTNative.get(this.transactionId, tableId, key);
         
         if (result.error == KVTNative.KVTError.KEY_NOT_FOUND) {
-            System.out.println("  - Result: KEY_NOT_FOUND");
             return null;
         } else if (result.error != KVTNative.KVTError.SUCCESS) {
             throw new BackendException("Failed to get key: %s", 
                                      result.errorMessage);
         }
-        
-        System.out.println("  - Value found, length: " + result.value.length + " bytes");
-        System.out.println("  - Value first 50 bytes (hex): " + bytesToHex(result.value, 50));
-        
         return result.value;
     }
     
@@ -189,15 +178,7 @@ public class KVTSession extends BackendSession.AbstractBackendSession {
     public void set(long tableId, byte[] key, byte[] value) {
         E.checkNotNull(key, "key");
         E.checkNotNull(value, "value");
-        
-        // Debug logging
-        System.out.println("[KVT-DEBUG] SET operation:");
-        System.out.println("  - Table ID: " + tableId);
-        System.out.println("  - Key (hex): " + bytesToHex(key));
-        System.out.println("  - Key (string): " + tryAsString(key));
-        System.out.println("  - Value length: " + value.length + " bytes");
-        System.out.println("  - Value first 50 bytes (hex): " + bytesToHex(value, 50));
-        
+
         KVTNative.KVTResult<Void> result = 
             KVTNative.set(this.transactionId, tableId, key, value);
         
@@ -254,7 +235,7 @@ public class KVTSession extends BackendSession.AbstractBackendSession {
                                      result.errorMessage);
         }
     }
-    
+
     /**
      * Scan a range of keys
      */
@@ -280,6 +261,58 @@ public class KVTSession extends BackendSession.AbstractBackendSession {
         }
         
         return pairs.iterator();
+    }
+
+    /**
+     * Scan a range with filter pushdown
+     */
+    public Iterator<KVTNative.KVTPair> scanWithFilter(long tableId,
+                                                      byte[] startKey,
+                                                      byte[] endKey,
+                                                      int limit,
+                                                      byte[] filterParams) {
+        KVTNative.KVTResult<KVTNative.KVTPair[]> result =
+                KVTNative.scanWithFilter(this.transactionId, tableId, startKey, endKey, limit, filterParams);
+        if (result.error != KVTNative.KVTError.SUCCESS &&
+            result.error != KVTNative.KVTError.SCAN_LIMIT_REACHED) {
+            throw new BackendException("Failed to scanWithFilter: %s", result.errorMessage);
+        }
+        KVTNative.KVTPair[] pairs = result.value != null ? result.value : new KVTNative.KVTPair[0];
+        List<KVTNative.KVTPair> list = new ArrayList<>(pairs.length);
+        for (KVTNative.KVTPair p : pairs) list.add(p);
+        return list.iterator();
+    }
+
+    /**
+     * Aggregate over range with pushdown
+     */
+    public byte[] aggregateRange(long tableId,
+                                 byte[] startKey,
+                                 byte[] endKey,
+                                 int limit,
+                                 int aggType,
+                                 byte[] aggParams) {
+        KVTNative.KVTResult<byte[]> result =
+                KVTNative.aggregateRange(this.transactionId, tableId, startKey, endKey, limit, aggType, aggParams);
+        if (result.error != KVTNative.KVTError.SUCCESS &&
+            result.error != KVTNative.KVTError.SCAN_LIMIT_REACHED) {
+            throw new BackendException("Failed to aggregateRange: %s", result.errorMessage);
+        }
+        return result.value;
+    }
+
+    /**
+     * Batch get multiple keys from a table using native batchGet
+     */
+    public byte[][] batchGet(long tableId, byte[][] keys) {
+        E.checkNotNull(keys, "keys");
+        KVTNative.KVTResult<byte[][]> result =
+                KVTNative.batchGet(this.transactionId, tableId, keys);
+        if (result.error != KVTNative.KVTError.SUCCESS &&
+            result.error != KVTNative.KVTError.BATCH_NOT_FULLY_SUCCESS) {
+            throw new BackendException("Failed to batchGet: %s", result.errorMessage);
+        }
+        return result.value;
     }
     
     @Override

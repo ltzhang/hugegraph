@@ -329,9 +329,19 @@ public class KVTNative {
      * @param filterParams Serialized filter parameters
      * @return Array with [errorCode, errorMessage, KVTPair[]]
      */
-    public static native Object[] nativeScanWithFilter(long txId, long tableId,
+    public static native Object[] nativeScanWithFilter(long txId, long tableId, 
                                                        byte[] startKey, byte[] endKey,
                                                        int limit, byte[] filterParams);
+
+    /**
+     * Aggregate over a range with pushdown functions.
+     * aggType: 0=COUNT, 1=SUM, 2=MIN, 3=MAX, 4=GROUPBY, 5=TOPK, 6=SAMPLE
+     * @return Array with [errorCode, errorMessage, resultBytes]
+     */
+    public static native Object[] nativeAggregateRange(long txId, long tableId,
+                                                       byte[] startKey, byte[] endKey,
+                                                       int limit, int aggType,
+                                                       byte[] aggParams);
     
     /**
      * Get multiple edges for a vertex using composite key optimization
@@ -550,7 +560,7 @@ public class KVTNative {
         Integer errorCode = (Integer) result[0];
         String errorMsg = result[1] != null ? result[1].toString() : "";
         KVTError error = KVTError.fromCode(errorCode);
-        if (error == KVTError.SUCCESS) {
+        if (error == KVTError.SUCCESS || error == KVTError.BATCH_NOT_FULLY_SUCCESS) {
             byte[][] values = (byte[][]) result[2];
             return new KVTResult<>(error, values, errorMsg);
         } else {
@@ -574,6 +584,21 @@ public class KVTNative {
         } else {
             return new KVTResult<>(error, null, errorMsg);
         }
+    }
+
+    /**
+     * Pushdown aggregation over range
+     */
+    public static KVTResult<byte[]> aggregateRange(long txId, long tableId,
+                                                   byte[] startKey, byte[] endKey,
+                                                   int limit, int aggType,
+                                                   byte[] aggParams) {
+        Object[] result = nativeAggregateRange(txId, tableId, startKey, endKey, limit, aggType, aggParams);
+        Integer errorCode = (Integer) result[0];
+        String errorMsg = result[1] != null ? result[1].toString() : "";
+        byte[] value = (byte[]) result[2];
+        KVTError error = KVTError.fromCode(errorCode);
+        return new KVTResult<>(error, value, errorMsg);
     }
     
     /**
