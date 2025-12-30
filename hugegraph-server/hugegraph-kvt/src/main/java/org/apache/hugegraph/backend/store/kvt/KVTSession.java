@@ -264,44 +264,6 @@ public class KVTSession extends BackendSession.AbstractBackendSession {
     }
 
     /**
-     * Scan a range with filter pushdown
-     */
-    public Iterator<KVTNative.KVTPair> scanWithFilter(long tableId,
-                                                      byte[] startKey,
-                                                      byte[] endKey,
-                                                      int limit,
-                                                      byte[] filterParams) {
-        KVTNative.KVTResult<KVTNative.KVTPair[]> result =
-                KVTNative.scanWithFilter(this.transactionId, tableId, startKey, endKey, limit, filterParams);
-        if (result.error != KVTNative.KVTError.SUCCESS &&
-            result.error != KVTNative.KVTError.SCAN_LIMIT_REACHED) {
-            throw new BackendException("Failed to scanWithFilter: %s", result.errorMessage);
-        }
-        KVTNative.KVTPair[] pairs = result.value != null ? result.value : new KVTNative.KVTPair[0];
-        List<KVTNative.KVTPair> list = new ArrayList<>(pairs.length);
-        for (KVTNative.KVTPair p : pairs) list.add(p);
-        return list.iterator();
-    }
-
-    /**
-     * Aggregate over range with pushdown
-     */
-    public byte[] aggregateRange(long tableId,
-                                 byte[] startKey,
-                                 byte[] endKey,
-                                 int limit,
-                                 int aggType,
-                                 byte[] aggParams) {
-        KVTNative.KVTResult<byte[]> result =
-                KVTNative.aggregateRange(this.transactionId, tableId, startKey, endKey, limit, aggType, aggParams);
-        if (result.error != KVTNative.KVTError.SUCCESS &&
-            result.error != KVTNative.KVTError.SCAN_LIMIT_REACHED) {
-            throw new BackendException("Failed to aggregateRange: %s", result.errorMessage);
-        }
-        return result.value;
-    }
-
-    /**
      * Batch get multiple keys from a table using native batchGet
      */
     public byte[][] batchGet(long tableId, byte[][] keys) {

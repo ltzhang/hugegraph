@@ -318,44 +318,6 @@ public class KVTNative {
      */
     public static native Object[] nativeBatchGet(long txId, long tableId, byte[][] keys);
     
-    /**
-     * Scan with filter pushdown
-     * Filter is applied at storage layer to reduce data transfer
-     * @param txId Transaction ID
-     * @param tableId Table ID
-     * @param startKey Start key for scan
-     * @param endKey End key for scan
-     * @param limit Maximum number of results
-     * @param filterParams Serialized filter parameters
-     * @return Array with [errorCode, errorMessage, KVTPair[]]
-     */
-    public static native Object[] nativeScanWithFilter(long txId, long tableId, 
-                                                       byte[] startKey, byte[] endKey,
-                                                       int limit, byte[] filterParams);
-
-    /**
-     * Aggregate over a range with pushdown functions.
-     * aggType: 0=COUNT, 1=SUM, 2=MIN, 3=MAX, 4=GROUPBY, 5=TOPK, 6=SAMPLE
-     * @return Array with [errorCode, errorMessage, resultBytes]
-     */
-    public static native Object[] nativeAggregateRange(long txId, long tableId,
-                                                       byte[] startKey, byte[] endKey,
-                                                       int limit, int aggType,
-                                                       byte[] aggParams);
-    
-    /**
-     * Get multiple edges for a vertex using composite key optimization
-     * Returns all edges for the given vertex in a single call
-     * @param txId Transaction ID
-     * @param tableId Table ID
-     * @param vertexId Vertex ID
-     * @param direction Edge direction (0=OUT, 1=IN, 2=BOTH)
-     * @param labelFilter Optional edge label filter
-     * @return Array with [errorCode, errorMessage, edges[]]
-     */
-    public static native Object[] nativeGetVertexEdges(long txId, long tableId,
-                                                       byte[] vertexId, int direction,
-                                                       byte[] labelFilter);
 
     // Java wrapper methods for easier usage
 
@@ -568,55 +530,5 @@ public class KVTNative {
         }
     }
     
-    /**
-     * Scan with filter pushdown
-     */
-    public static KVTResult<KVTPair[]> scanWithFilter(long txId, long tableId,
-                                                      byte[] startKey, byte[] endKey,
-                                                      int limit, byte[] filterParams) {
-        Object[] result = nativeScanWithFilter(txId, tableId, startKey, endKey, limit, filterParams);
-        Integer errorCode = (Integer) result[0];
-        String errorMsg = result[1] != null ? result[1].toString() : "";
-        KVTError error = KVTError.fromCode(errorCode);
-        if (error == KVTError.SUCCESS || error == KVTError.SCAN_LIMIT_REACHED) {
-            KVTPair[] pairs = (KVTPair[]) result[2];
-            return new KVTResult<>(error, pairs, errorMsg);
-        } else {
-            return new KVTResult<>(error, null, errorMsg);
-        }
-    }
-
-    /**
-     * Pushdown aggregation over range
-     */
-    public static KVTResult<byte[]> aggregateRange(long txId, long tableId,
-                                                   byte[] startKey, byte[] endKey,
-                                                   int limit, int aggType,
-                                                   byte[] aggParams) {
-        Object[] result = nativeAggregateRange(txId, tableId, startKey, endKey, limit, aggType, aggParams);
-        Integer errorCode = (Integer) result[0];
-        String errorMsg = result[1] != null ? result[1].toString() : "";
-        byte[] value = (byte[]) result[2];
-        KVTError error = KVTError.fromCode(errorCode);
-        return new KVTResult<>(error, value, errorMsg);
-    }
-    
-    /**
-     * Get all edges for a vertex
-     */
-    public static KVTResult<byte[][]> getVertexEdges(long txId, long tableId,
-                                                     byte[] vertexId, int direction,
-                                                     byte[] labelFilter) {
-        Object[] result = nativeGetVertexEdges(txId, tableId, vertexId, direction, labelFilter);
-        Integer errorCode = (Integer) result[0];
-        String errorMsg = result[1] != null ? result[1].toString() : "";
-        KVTError error = KVTError.fromCode(errorCode);
-        if (error == KVTError.SUCCESS) {
-            byte[][] edges = (byte[][]) result[2];
-            return new KVTResult<>(error, edges, errorMsg);
-        } else {
-            return new KVTResult<>(error, null, errorMsg);
-        }
-    }
     
 }

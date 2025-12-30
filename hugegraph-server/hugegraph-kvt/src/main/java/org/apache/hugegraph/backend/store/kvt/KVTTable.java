@@ -25,7 +25,6 @@ import java.util.List;
 import org.apache.hugegraph.backend.BackendException;
 import org.apache.hugegraph.backend.id.Id;
 import org.apache.hugegraph.backend.id.IdGenerator;
-import org.apache.hugegraph.backend.query.Condition;
 import org.apache.hugegraph.backend.query.ConditionQuery;
 import org.apache.hugegraph.backend.query.IdQuery;
 import org.apache.hugegraph.backend.query.IdPrefixQuery;
@@ -511,13 +510,12 @@ public class KVTTable extends BackendTable<KVTSession, BackendEntry> {
         
         int limit = query.limit() == Query.NO_LIMIT ? Integer.MAX_VALUE : (int) query.limit();
 
-        Iterator<KVTNative.KVTPair> pairs;
         if (range.hasFilters()) {
-            byte[] filterParams = buildFilterParams(range.filterConditions);
-            pairs = session.scanWithFilter(this.tableId, range.startKey, range.endKey, limit, filterParams);
-        } else {
-            pairs = session.scan(this.tableId, range.startKey, range.endKey, limit);
+            throw new NotSupportException("query: %s", query);
         }
+
+        Iterator<KVTNative.KVTPair> pairs =
+            session.scan(this.tableId, range.startKey, range.endKey, limit);
 
         return new MapperIterator<>(pairs, pair -> {
             Id id = KVTIdUtil.bytesToId(pair.key);
@@ -641,21 +639,6 @@ public class KVTTable extends BackendTable<KVTSession, BackendEntry> {
     
     @Override
     public Number queryNumber(KVTSession session, Query query) {
-        // Prefer pushdown COUNT aggregation when possible
-        try {
-            KVTQueryTranslator.ScanRange range = KVTQueryTranslator.translateToScan(query, this.type);
-            byte[] startKey = range.startKey != null ? range.startKey : KVTIdUtil.scanStartKey(this.type, null);
-            byte[] endKey = range.endKey != null ? range.endKey : KVTIdUtil.scanEndKey(this.type, null);
-            int limit = query.limit() == Query.NO_LIMIT ? Integer.MAX_VALUE : (int) query.limit();
-            byte[] result = session.aggregateRange(this.tableId, startKey, endKey, limit, 0 /* COUNT */, new byte[0]);
-            if (result != null && result.length > 0) {
-                String s = new String(result);
-                return Long.parseLong(s.trim());
-            }
-        } catch (Throwable ignored) {
-            // Fallback below
-        }
-
         long count = 0L;
         Iterator<BackendEntry> iter = this.query(session, query);
         while (iter.hasNext()) { iter.next(); count++; }
@@ -718,45 +701,4 @@ public class KVTTable extends BackendTable<KVTSession, BackendEntry> {
         return this.cache != null ? this.cache.getStatistics() : null;
     }
 
-    // Build a minimal filter parameter blob for native property filter pushdown
-    // Encoding: [num_conditions vInt] repeated { [key_len vInt][key][relation 1B][val_len vInt][value] }
-    private byte[] buildFilterParams(List<Condition> conditions) {
-        // Collect relation conditions only
-        List<Condition.Relation> rels = new ArrayList<>();
-        for (Condition c : conditions) {
-            if (c instanceof Condition.Relation) {
-                rels.add((Condition.Relation) c);
-            }
-        }
-        BytesBuffer buf = BytesBuffer.allocate(64);
-        buf.writeVInt(rels.size());
-        for (Condition.Relation r : rels) {
-            String keyStr = String.valueOf(r.key());
-            byte[] keyBytes = keyStr.getBytes();
-            buf.writeVInt(keyBytes.length);
-            buf.write(keyBytes);
-            buf.write(relationCode(r));
-            String valStr = String.valueOf(r.value());
-            byte[] valBytes = valStr.getBytes();
-            buf.writeVInt(valBytes.length);
-            buf.write(valBytes);
-        }
-        return buf.bytes();
-    }
-
-    private byte relationCode(Condition.Relation r) {
-        switch (r.relation()) {
-            case EQ: return 1;
-            case IN: return 2;
-            case GT: return 3;
-            case GTE: return 4;
-            case LT: return 5;
-            case LTE: return 6;
-            case CONTAINS: return 7;
-            case CONTAINS_KEY: return 8;
-            case CONTAINS_VALUE: return 9;
-            case NEQ: return 10;
-            default: return 0;
-        }
-    }
 }
