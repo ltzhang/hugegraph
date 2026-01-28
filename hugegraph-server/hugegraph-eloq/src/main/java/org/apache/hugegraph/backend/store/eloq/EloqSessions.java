@@ -24,6 +24,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.hugegraph.backend.BackendException;
@@ -48,6 +49,8 @@ public class EloqSessions extends BackendSessionPool {
 
     private static final Logger LOG = Log.logger(EloqSessions.class);
 
+    private static final AtomicBoolean NATIVE_INITIALIZED = new AtomicBoolean(false);
+
     private final String database;
     private final String store;
     private final Set<String> openedTables;
@@ -63,6 +66,13 @@ public class EloqSessions extends BackendSessionPool {
 
     @Override
     public void open() throws Exception {
+        if (NATIVE_INITIALIZED.compareAndSet(false, true)) {
+            EloqNative.init("");
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                EloqNative.shutdown();
+            }));
+            LOG.info("EloqRocks native service initialized");
+        }
         this.opened = true;
         LOG.debug("Opened EloqSessions for {}/{}", this.database, this.store);
     }
@@ -96,15 +106,46 @@ public class EloqSessions extends BackendSessionPool {
 
     public void createTable(String... tables) {
         for (String table : tables) {
-            EloqNative.createTable(table);
+            if (!EloqNative.hasTable(table)) {
+                EloqNative.createTable(table);
+            }
             this.openedTables.add(table);
         }
     }
 
     public void dropTable(String... tables) {
         for (String table : tables) {
-            EloqNative.dropTable(table);
+            if (EloqNative.hasTable(table)) {
+                EloqNative.dropTable(table);
+            }
             this.openedTables.remove(table);
+        }
+    }
+
+    public void clearTable(String... tables) {
+        for (String table : tables) {
+            if (EloqNative.hasTable(table)) {
+                // Scan all keys and delete them within a transaction
+                long tx = EloqNative.startTx();
+                try {
+                    byte[][][] results = EloqNative.scan(
+                        tx, table, null, null, true, true, 0);
+                    if (results != null && results[0] != null) {
+                        for (byte[] key : results[0]) {
+                            EloqNative.delete(tx, table, key);
+                        }
+                    }
+                    EloqNative.commitTx(tx);
+                } catch (Exception e) {
+                    try {
+                        EloqNative.abortTx(tx);
+                    } catch (Exception abortEx) {
+                        LOG.warn("Failed to abort tx in clearTable()", abortEx);
+                    }
+                    throw new BackendException(
+                            "Failed to clear table '%s'", e, table);
+                }
+            }
         }
     }
 

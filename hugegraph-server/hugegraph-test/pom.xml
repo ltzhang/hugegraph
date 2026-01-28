@@ -80,6 +80,11 @@
             <artifactId>hugegraph-dist</artifactId>
             <version>${revision}</version>
         </dependency>
+        <dependency>
+            <groupId>org.apache.hugegraph</groupId>
+            <artifactId>hugegraph-eloq</artifactId>
+            <version>${revision}</version>
+        </dependency>
 
         <dependency>
             <groupId>org.apache.tinkerpop</groupId>
@@ -391,6 +396,31 @@
                 <backend>hstore</backend>
                 <serializer>binary</serializer>
             </properties>
+        </profile>
+        <profile>
+            <id>eloq</id>
+            <activation>
+                <activeByDefault>false</activeByDefault>
+            </activation>
+            <properties>
+                <backend>eloq</backend>
+                <serializer>binary</serializer>
+            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-surefire-plugin</artifactId>
+                        <configuration>
+                            <argLine>${argLine} -Djava.library.path=${project.basedir}/../hugegraph-eloq/target/native</argLine>
+                            <environmentVariables>
+                                <LD_PRELOAD>/usr/local/lib/libmimalloc.so.2</LD_PRELOAD>
+                                <GLIBC_TUNABLES>glibc.rtld.optional_static_tls=16384</GLIBC_TUNABLES>
+                            </environmentVariables>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
         </profile>
     </profiles>
 </project>

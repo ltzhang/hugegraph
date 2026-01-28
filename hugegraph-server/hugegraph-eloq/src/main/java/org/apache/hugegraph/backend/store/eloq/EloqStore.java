@@ -77,6 +77,16 @@ public abstract class EloqStore
         this.storeLock = new ReentrantReadWriteLock();
     }
 
+    /**
+     * Returns a store-qualified database prefix for table naming.
+     * EloqRocks uses a single global namespace, so table names must be
+     * unique across stores (schema "m", graph "g", system "s").
+     * Format: "database/store" e.g. "hugegraph/g"
+     */
+    protected String tableDatabase() {
+        return this.database + "/" + this.store;
+    }
+
     protected void registerTableManager(HugeType type, EloqTable table) {
         this.tables.put(type, table);
     }
@@ -209,7 +219,9 @@ public abstract class EloqStore
         writeLock.lock();
         try {
             this.checkDbOpened();
-            this.sessions.dropTable(
+            // Use clearTable (scan+delete) instead of dropTable to avoid
+            // EloqRocks SST file corruption from rapid drop+create cycles
+            this.sessions.clearTable(
                     this.tableNames().toArray(new String[0]));
             LOG.debug("Store cleared: {}", this.store);
         } catch (Exception e) {
@@ -344,6 +356,12 @@ public abstract class EloqStore
             case ELIMINATE:
                 table.eliminate(session, entry);
                 break;
+            case UPDATE_IF_PRESENT:
+                table.updateIfPresent(session, entry);
+                break;
+            case UPDATE_IF_ABSENT:
+                table.updateIfAbsent(session, entry);
+                break;
             default:
                 throw new AssertionError(String.format(
                         "Unsupported mutate action: %s", item.action()));
@@ -426,18 +444,19 @@ public abstract class EloqStore
                                String database, String store) {
             super(provider, database, store);
 
-            this.counters = new EloqTables.Counters(database);
+            String td = tableDatabase();
+            this.counters = new EloqTables.Counters(td);
 
             registerTableManager(HugeType.VERTEX_LABEL,
-                    new EloqTables.VertexLabel(database));
+                    new EloqTables.VertexLabel(td));
             registerTableManager(HugeType.EDGE_LABEL,
-                    new EloqTables.EdgeLabel(database));
+                    new EloqTables.EdgeLabel(td));
             registerTableManager(HugeType.PROPERTY_KEY,
-                    new EloqTables.PropertyKey(database));
+                    new EloqTables.PropertyKey(td));
             registerTableManager(HugeType.INDEX_LABEL,
-                    new EloqTables.IndexLabel(database));
+                    new EloqTables.IndexLabel(td));
             registerTableManager(HugeType.SECONDARY_INDEX,
-                    new EloqTables.SecondaryIndex(database));
+                    new EloqTables.SecondaryIndex(td));
         }
 
         @Override
@@ -487,49 +506,50 @@ public abstract class EloqStore
                               String database, String store) {
             super(provider, database, store);
 
+            String td = tableDatabase();
             registerTableManager(HugeType.VERTEX,
-                    new EloqTables.Vertex(database));
+                    new EloqTables.Vertex(td));
             registerTableManager(HugeType.EDGE_OUT,
-                    EloqTables.Edge.out(database));
+                    EloqTables.Edge.out(td));
             registerTableManager(HugeType.EDGE_IN,
-                    EloqTables.Edge.in(database));
+                    EloqTables.Edge.in(td));
 
             registerTableManager(HugeType.SECONDARY_INDEX,
-                    new EloqTables.SecondaryIndex(database));
+                    new EloqTables.SecondaryIndex(td));
             registerTableManager(HugeType.VERTEX_LABEL_INDEX,
-                    new EloqTables.VertexLabelIndex(database));
+                    new EloqTables.VertexLabelIndex(td));
             registerTableManager(HugeType.EDGE_LABEL_INDEX,
-                    new EloqTables.EdgeLabelIndex(database));
+                    new EloqTables.EdgeLabelIndex(td));
             registerTableManager(HugeType.RANGE_INT_INDEX,
-                    new EloqTables.RangeIntIndex(database));
+                    new EloqTables.RangeIntIndex(td));
             registerTableManager(HugeType.RANGE_FLOAT_INDEX,
-                    new EloqTables.RangeFloatIndex(database));
+                    new EloqTables.RangeFloatIndex(td));
             registerTableManager(HugeType.RANGE_LONG_INDEX,
-                    new EloqTables.RangeLongIndex(database));
+                    new EloqTables.RangeLongIndex(td));
             registerTableManager(HugeType.RANGE_DOUBLE_INDEX,
-                    new EloqTables.RangeDoubleIndex(database));
+                    new EloqTables.RangeDoubleIndex(td));
             registerTableManager(HugeType.SEARCH_INDEX,
-                    new EloqTables.SearchIndex(database));
+                    new EloqTables.SearchIndex(td));
             registerTableManager(HugeType.SHARD_INDEX,
-                    new EloqTables.ShardIndex(database));
+                    new EloqTables.ShardIndex(td));
             registerTableManager(HugeType.UNIQUE_INDEX,
-                    new EloqTables.UniqueIndex(database));
+                    new EloqTables.UniqueIndex(td));
 
             registerTableManager(this.olapTableName(
                     HugeType.SECONDARY_INDEX),
-                    new EloqTables.OlapSecondaryIndex(store));
+                    new EloqTables.OlapSecondaryIndex(td));
             registerTableManager(this.olapTableName(
                     HugeType.RANGE_INT_INDEX),
-                    new EloqTables.OlapRangeIntIndex(store));
+                    new EloqTables.OlapRangeIntIndex(td));
             registerTableManager(this.olapTableName(
                     HugeType.RANGE_LONG_INDEX),
-                    new EloqTables.OlapRangeLongIndex(store));
+                    new EloqTables.OlapRangeLongIndex(td));
             registerTableManager(this.olapTableName(
                     HugeType.RANGE_FLOAT_INDEX),
-                    new EloqTables.OlapRangeFloatIndex(store));
+                    new EloqTables.OlapRangeFloatIndex(td));
             registerTableManager(this.olapTableName(
                     HugeType.RANGE_DOUBLE_INDEX),
-                    new EloqTables.OlapRangeDoubleIndex(store));
+                    new EloqTables.OlapRangeDoubleIndex(td));
         }
 
         @Override
@@ -557,7 +577,7 @@ public abstract class EloqStore
 
         @Override
         public void createOlapTable(Id id) {
-            EloqTable table = new EloqTables.OlapTable(this.store(), id);
+            EloqTable table = new EloqTables.OlapTable(tableDatabase(), id);
             try {
                 this.sessions().createTable(table.table());
             } catch (Exception e) {
@@ -569,7 +589,7 @@ public abstract class EloqStore
 
         @Override
         public void checkAndRegisterOlapTable(Id id) {
-            EloqTable table = new EloqTables.OlapTable(this.store(), id);
+            EloqTable table = new EloqTables.OlapTable(tableDatabase(), id);
             if (!this.sessions().existsTable(table.table())) {
                 throw new HugeException(
                         "Not exist table '%s'", table.table());
@@ -623,7 +643,7 @@ public abstract class EloqStore
         public EloqSystemStore(BackendStoreProvider provider,
                                String database, String store) {
             super(provider, database, store);
-            this.meta = new EloqTables.Meta(database);
+            this.meta = new EloqTables.Meta(tableDatabase());
         }
 
         @Override
