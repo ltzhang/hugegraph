@@ -94,6 +94,9 @@ public class RegisterUtil {
             case "hstore":
                 registerHstore();
                 break;
+            case "eloq":
+                registerEloq();
+                break;
             default:
                 throw new HugeException("Unsupported backend type '%s'", backend);
         }
@@ -200,6 +203,16 @@ public class RegisterUtil {
         // Register backend
         BackendProviderFactory.register("hstore",
                                         "org.apache.hugegraph.backend.store.hstore.HstoreProvider");
+    }
+
+    public static void registerEloq() {
+        // Register config
+        OptionSpace.register("eloq",
+                             "org.apache.hugegraph.backend.store.eloq.EloqOptions");
+        // Register backend
+        BackendProviderFactory.register("eloq",
+                                        "org.apache.hugegraph.backend.store.eloq" +
+                                        ".EloqStoreProvider");
     }
 
     public static void registerServer() {
