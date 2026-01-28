@@ -252,6 +252,43 @@ Both environment variables are required:
 
 **For production deployment:** Any process that loads `libeloqjni.so` (HugeGraph server, tests, etc.) must set these two environment variables before the JVM starts. This applies to `start-hugegraph.sh`, Maven surefire, and any other launcher.
 
+### Phase 2 & 3 Status: COMPLETE (Session/Table/Store Layer)
+
+Implemented full HugeGraph backend adapter layer following RocksDB patterns:
+- `EloqSessions.java` — Session pool with transaction management via JNI
+- `EloqTable.java` — BackendTable implementation for CRUD operations
+- `EloqTables.java` — Table subclasses for each HugeGraph table type
+- `EloqStore.java` — BackendStore with schema/graph/system store variants
+- `EloqStoreProvider.java` — BackendStoreProvider registration
+- `EloqFeatures.java` — Backend capability declarations
+- `EloqOptions.java` — Configuration options
+- `EloqPlugin.java` — HugeGraph plugin SPI
+
+### Phase 4 Status: COMPLETE (HugeGraph CoreTestSuite Integration)
+
+EloqRocks backend passes schema tests and most vertex tests.
+
+**Test Results:**
+- Schema tests (PropertyKeyCoreTest, VertexLabelCoreTest, EdgeLabelCoreTest, IndexLabelCoreTest): **156/156 pass**
+- VertexCoreTest: **53/60 pass** (1 TTL failure, 1 special index value error, 5 skipped)
+
+**Known Limitations (same as RocksDB/MySQL/memory backends):**
+- **TTL not supported**: `supportsTtl()` returns `false`. TTL tests fail because vertices don't auto-expire. Only Cassandra and HBase support TTL natively.
+
+**Bug Fixes Made During Phase 4:**
+1. **UPDATE_IF_ABSENT missing**: Added missing mutation action cases in `EloqStore.mutateEntry()`
+2. **dropTable crash**: Added `hasTable()` check before dropping non-existent tables
+3. **Native initialization**: Added `AtomicBoolean` guard for `EloqNative.init()` in `EloqSessions.open()`
+4. **SST file corruption**: Changed `clear()` to use `clearTable()` (scan+delete) instead of drop+create
+5. **Table name collision**: Added `tableDatabase()` prefix (`database/store`) for unique table names per store
+
+**Running CoreTestSuite with eloq backend:**
+```bash
+mvn test -pl hugegraph-server/hugegraph-test -Peloq \
+    -Dexec=core-test \
+    -Dtest=PropertyKeyCoreTest,VertexLabelCoreTest,EdgeLabelCoreTest,IndexLabelCoreTest,VertexCoreTest
+```
+
 ### Key Files for Reference
 | Purpose | Path |
 |---------|------|
@@ -262,3 +299,4 @@ Both environment variables are required:
 | KVT backend (JNI reference) | `hugegraph-server/hugegraph-kvt/src/main/java/org/apache/hugegraph/backend/store/kvt/` |
 | EloqRocks C++ source | `hugegraph-server/hugegraph-eloq/eloqrocks/` |
 | EloqRocks architecture docs | `hugegraph-server/hugegraph-eloq/eloqrocks/docs/architecture.md` |
+| Eloq adapter code | `hugegraph-server/hugegraph-eloq/src/main/java/org/apache/hugegraph/backend/store/eloq/` |
