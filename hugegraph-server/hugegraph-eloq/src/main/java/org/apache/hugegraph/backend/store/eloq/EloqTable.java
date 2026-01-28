@@ -171,13 +171,14 @@ public class EloqTable
 
     protected BackendColumnIterator queryAll(EloqSessions.EloqSession session,
                                              Query query) {
+        int limit = queryLimit(query);
         if (query.paging()) {
             PageState page = PageState.fromString(query.page());
             byte[] begin = page.position();
             return session.scan(this.table(), begin, null,
-                                EloqSessions.EloqSession.SCAN_ANY);
+                                EloqSessions.EloqSession.SCAN_ANY, limit);
         } else {
-            return session.scan(this.table());
+            return session.scan(this.table(), limit);
         }
     }
 
@@ -225,8 +226,9 @@ public class EloqTable
                    EloqSessions.EloqSession.SCAN_GTE_BEGIN :
                    EloqSessions.EloqSession.SCAN_GT_BEGIN;
         type |= EloqSessions.EloqSession.SCAN_PREFIX_END;
+        int limit = queryLimit(query);
         return session.scan(this.table(), query.start().asBytes(),
-                            query.prefix().asBytes(), type);
+                            query.prefix().asBytes(), type, limit);
     }
 
     protected BackendColumnIterator queryByRange(
@@ -241,7 +243,8 @@ public class EloqTable
                     EloqSessions.EloqSession.SCAN_LTE_END :
                     EloqSessions.EloqSession.SCAN_LT_END;
         }
-        return session.scan(this.table(), start, end, type);
+        int limit = queryLimit(query);
+        return session.scan(this.table(), start, end, type, limit);
     }
 
     protected BackendColumnIterator queryByCond(
@@ -251,13 +254,15 @@ public class EloqTable
                             "Invalid scan with multi conditions: %s", query);
             Relation scan = query.relations().iterator().next();
             Shard shard = (Shard) scan.value();
-            return this.queryByRange(session, shard, query.page());
+            int limit = queryLimit(query);
+            return this.queryByRange(session, shard, query.page(), limit);
         }
         throw new NotSupportException("query: %s", query);
     }
 
     protected BackendColumnIterator queryByRange(
-            EloqSessions.EloqSession session, Shard shard, String page) {
+            EloqSessions.EloqSession session, Shard shard, String page,
+            int limit) {
         byte[] start = this.position(shard.start());
         byte[] end = this.position(shard.end());
         if (page != null && !page.isEmpty()) {
@@ -274,7 +279,7 @@ public class EloqTable
         if (end != null) {
             type |= EloqSessions.EloqSession.SCAN_LT_END;
         }
-        return session.scan(this.table(), start, end, type);
+        return session.scan(this.table(), start, end, type, limit);
     }
 
     protected byte[] position(String position) {
@@ -287,6 +292,24 @@ public class EloqTable
 
     public boolean isOlap() {
         return false;
+    }
+
+    /**
+     * Compute the limit to pass to native scan.
+     * Returns 0 (no limit) if query has no limit.
+     * Otherwise returns limit + 1 to allow detecting more pages.
+     */
+    protected static int queryLimit(Query query) {
+        if (query.noLimit()) {
+            return 0;
+        }
+        long limit = query.limit();
+        // Add 1 to detect if there are more results for paging
+        // Cap at Integer.MAX_VALUE to avoid overflow
+        if (limit >= Integer.MAX_VALUE - 1) {
+            return 0; // Effectively no limit
+        }
+        return (int) (limit + 1);
     }
 
     // ---- Entry iterator construction ----

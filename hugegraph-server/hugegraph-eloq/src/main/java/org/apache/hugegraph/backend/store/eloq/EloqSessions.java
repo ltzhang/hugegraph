@@ -67,11 +67,16 @@ public class EloqSessions extends BackendSessionPool {
     @Override
     public void open() throws Exception {
         if (NATIVE_INITIALIZED.compareAndSet(false, true)) {
-            EloqNative.init("");
-            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                EloqNative.shutdown();
-            }));
-            LOG.info("EloqRocks native service initialized");
+            try {
+                EloqNative.init("");
+                Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                    EloqNative.shutdown();
+                }));
+                LOG.info("EloqRocks native service initialized");
+            } catch (Exception e) {
+                NATIVE_INITIALIZED.set(false);
+                throw e;
+            }
         }
         this.opened = true;
         LOG.debug("Opened EloqSessions for {}/{}", this.database, this.store);
@@ -342,19 +347,34 @@ public class EloqSessions extends BackendSessionPool {
         // ---- Scan operations ----
 
         public BackendColumnIterator scan(String table) {
+            return this.scan(table, 0);
+        }
+
+        public BackendColumnIterator scan(String table, int limit) {
             byte[][][] results = EloqNative.scan(
-                0L, table, null, null, true, true, 0);
+                0L, table, null, null, true, true, limit);
             return toColumnIterator(results);
         }
 
         public BackendColumnIterator scan(String table, byte[] prefix) {
+            return this.scan(table, prefix, 0);
+        }
+
+        public BackendColumnIterator scan(String table, byte[] prefix,
+                                          int limit) {
             byte[][][] results = EloqNative.scan(
-                0L, table, prefix, null, true, false, 0);
+                0L, table, prefix, null, true, false, limit);
             return toPrefixColumnIterator(results, prefix);
         }
 
         public BackendColumnIterator scan(String table, byte[] keyFrom,
                                           byte[] keyTo, int scanType) {
+            return this.scan(table, keyFrom, keyTo, scanType, 0);
+        }
+
+        public BackendColumnIterator scan(String table, byte[] keyFrom,
+                                          byte[] keyTo, int scanType,
+                                          int limit) {
             boolean startInclusive =
                 matchScanType(SCAN_GTE_BEGIN, scanType) ||
                 matchScanType(SCAN_PREFIX_BEGIN, scanType);
@@ -368,19 +388,19 @@ public class EloqSessions extends BackendSessionPool {
                 // keyTo is a prefix, not an end key
                 results = EloqNative.scan(
                     0L, table, keyFrom, null,
-                    startInclusive, false, 0);
+                    startInclusive, false, limit);
                 return toPrefixColumnIterator(results, keyTo);
             }
 
             results = EloqNative.scan(
                 0L, table, keyFrom, keyTo,
-                startInclusive, endInclusive, 0);
+                startInclusive, endInclusive, limit);
             return toColumnIterator(results);
         }
 
         public BackendColumnIterator scan(String table,
                                           byte[] keyFrom, byte[] keyTo) {
-            return this.scan(table, keyFrom, keyTo, SCAN_LT_END);
+            return this.scan(table, keyFrom, keyTo, SCAN_LT_END, 0);
         }
 
         // ---- Info stubs ----

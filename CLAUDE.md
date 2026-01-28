@@ -264,16 +264,17 @@ Implemented full HugeGraph backend adapter layer following RocksDB patterns:
 - `EloqOptions.java` — Configuration options
 - `EloqPlugin.java` — HugeGraph plugin SPI
 
-### Phase 4 Status: COMPLETE (HugeGraph CoreTestSuite Integration)
+### Phase 4 Status: IN PROGRESS (HugeGraph CoreTestSuite Integration)
 
-EloqRocks backend passes schema tests and most vertex tests.
+EloqRocks backend passes schema tests and most vertex tests. Edge tests are blocked by paging performance issues.
 
 **Test Results:**
 - Schema tests (PropertyKeyCoreTest, VertexLabelCoreTest, EdgeLabelCoreTest, IndexLabelCoreTest): **156/156 pass**
 - VertexCoreTest: **53/60 pass** (1 TTL failure, 1 special index value error, 5 skipped)
+- EdgeCoreTest: **Ready to test** - Scan limit push-down implemented; paging tests should now complete faster
 
-**Known Limitations (same as RocksDB/MySQL/memory backends):**
-- **TTL not supported**: `supportsTtl()` returns `false`. TTL tests fail because vertices don't auto-expire. Only Cassandra and HBase support TTL natively.
+**Known Limitations:**
+- **TTL not supported**: `supportsTtl()` returns `false`. TTL tests fail because vertices don't auto-expire. Only Cassandra and HBase support TTL natively. (Same as RocksDB/MySQL/memory backends)
 
 **Bug Fixes Made During Phase 4:**
 1. **UPDATE_IF_ABSENT missing**: Added missing mutation action cases in `EloqStore.mutateEntry()`
@@ -281,9 +282,19 @@ EloqRocks backend passes schema tests and most vertex tests.
 3. **Native initialization**: Added `AtomicBoolean` guard for `EloqNative.init()` in `EloqSessions.open()`
 4. **SST file corruption**: Changed `clear()` to use `clearTable()` (scan+delete) instead of drop+create
 5. **Table name collision**: Added `tableDatabase()` prefix (`database/store`) for unique table names per store
+6. **Init failure recovery**: Fixed `AtomicBoolean` to reset on init failure so retries can succeed
+7. **Scan limit optimization**: Implemented scan limit push-down to C++ layer. EloqRocks C++ API now supports `start_inclusive`, `end_inclusive`, and `limit` parameters on Scan(). Java adapter passes `query.limit() + 1` to native layer for paged queries, significantly improving performance for large result sets.
+
+**Troubleshooting EloqRocks Test Failures:**
+- **JVM crash (SIGABRT exit 134)**: A background process from a previous test run may be holding ports needed by EloqRocks log service. Kill all java processes related to hugegraph-test (`pkill -f hugegraph-test`) before running tests.
+- **"Failed to initialize EloqRocks"**: Usually caused by port conflicts (see above) or missing LD_PRELOAD. Check that no stale processes are running.
 
 **Running CoreTestSuite with eloq backend:**
 ```bash
+# Run full CoreTestSuite (may timeout on paging tests)
+mvn test -pl hugegraph-server/hugegraph-test -Peloq -DfailIfNoTests=false
+
+# Run specific test classes (recommended for faster feedback)
 mvn test -pl hugegraph-server/hugegraph-test -Peloq \
     -Dexec=core-test \
     -Dtest=PropertyKeyCoreTest,VertexLabelCoreTest,EdgeLabelCoreTest,IndexLabelCoreTest,VertexCoreTest
