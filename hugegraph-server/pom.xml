@@ -73,6 +73,7 @@
         <module>hugegraph-postgresql</module>
         <module>hugegraph-hstore</module>
         <module>hugegraph-kvt</module>
+        <module>hugegraph-eloq</module>
     </modules>
 
     <dependencyManagement>

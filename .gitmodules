@@ -1,0 +1,3 @@
+[submodule "hugegraph-server/hugegraph-eloq/eloqrocks"]
+	path = hugegraph-server/hugegraph-eloq/eloqrocks
+	url = git@github.com:ltzhang/eloqrocks.git
