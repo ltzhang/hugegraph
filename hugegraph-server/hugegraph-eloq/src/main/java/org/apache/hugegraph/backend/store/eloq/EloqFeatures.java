@@ -83,8 +83,7 @@ public class EloqFeatures implements BackendFeatures {
 
     @Override
     public boolean supportsQueryByPage() {
-        // TODO: Paging tests hang - disable until fixed
-        return false;
+        return true;
     }
 
     @Override

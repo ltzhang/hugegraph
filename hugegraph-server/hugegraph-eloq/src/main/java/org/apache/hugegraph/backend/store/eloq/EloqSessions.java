@@ -341,7 +341,7 @@ public class EloqSessions extends BackendSessionPool {
                     results.add(BackendColumn.of(key, value));
                 }
             }
-            return new EloqColumnIterator(results);
+            return new EloqColumnIterator(results, 0);
         }
 
         // ---- Scan operations ----
@@ -353,7 +353,7 @@ public class EloqSessions extends BackendSessionPool {
         public BackendColumnIterator scan(String table, int limit) {
             byte[][][] results = EloqNative.scan(
                 0L, table, null, null, true, true, limit);
-            return toColumnIterator(results);
+            return toColumnIterator(results, limit);
         }
 
         public BackendColumnIterator scan(String table, byte[] prefix) {
@@ -364,7 +364,7 @@ public class EloqSessions extends BackendSessionPool {
                                           int limit) {
             byte[][][] results = EloqNative.scan(
                 0L, table, prefix, null, true, false, limit);
-            return toPrefixColumnIterator(results, prefix);
+            return toPrefixColumnIterator(results, prefix, limit);
         }
 
         public BackendColumnIterator scan(String table, byte[] keyFrom,
@@ -376,6 +376,7 @@ public class EloqSessions extends BackendSessionPool {
                                           byte[] keyTo, int scanType,
                                           int limit) {
             boolean startInclusive =
+                matchScanType(SCAN_ANY, scanType) ||
                 matchScanType(SCAN_GTE_BEGIN, scanType) ||
                 matchScanType(SCAN_PREFIX_BEGIN, scanType);
             boolean endInclusive =
@@ -389,13 +390,13 @@ public class EloqSessions extends BackendSessionPool {
                 results = EloqNative.scan(
                     0L, table, keyFrom, null,
                     startInclusive, false, limit);
-                return toPrefixColumnIterator(results, keyTo);
+                return toPrefixColumnIterator(results, keyTo, limit);
             }
 
             results = EloqNative.scan(
                 0L, table, keyFrom, keyTo,
                 startInclusive, endInclusive, limit);
-            return toColumnIterator(results);
+            return toColumnIterator(results, limit);
         }
 
         public BackendColumnIterator scan(String table,
@@ -434,7 +435,8 @@ public class EloqSessions extends BackendSessionPool {
     // Column iterator implementations
     // =====================================================
 
-    static BackendColumnIterator toColumnIterator(byte[][][] results) {
+    static BackendColumnIterator toColumnIterator(byte[][][] results,
+                                                    int scanLimit) {
         if (results == null || results[0] == null ||
             results[0].length == 0) {
             return BackendColumnIterator.empty();
@@ -443,11 +445,15 @@ public class EloqSessions extends BackendSessionPool {
         for (int i = 0; i < results[0].length; i++) {
             columns.add(BackendColumn.of(results[0][i], results[1][i]));
         }
-        return new EloqColumnIterator(columns);
+        return new EloqColumnIterator(columns, scanLimit);
+    }
+
+    static BackendColumnIterator toColumnIterator(byte[][][] results) {
+        return toColumnIterator(results, 0);
     }
 
     static BackendColumnIterator toPrefixColumnIterator(
-            byte[][][] results, byte[] prefix) {
+            byte[][][] results, byte[] prefix, int scanLimit) {
         if (results == null || results[0] == null ||
             results[0].length == 0) {
             return BackendColumnIterator.empty();
@@ -461,19 +467,33 @@ public class EloqSessions extends BackendSessionPool {
         if (columns.isEmpty()) {
             return BackendColumnIterator.empty();
         }
-        return new EloqColumnIterator(columns);
+        return new EloqColumnIterator(columns, scanLimit);
+    }
+
+    static BackendColumnIterator toPrefixColumnIterator(
+            byte[][][] results, byte[] prefix) {
+        return toPrefixColumnIterator(results, prefix, 0);
     }
 
     /**
      * In-memory column iterator backed by a list of BackendColumn.
+     *
+     * The scanLimit tracks the limit that was passed to the native scan.
+     * When all columns are consumed and columns.size() < scanLimit,
+     * position() returns null to signal "no more data" (end of pages).
+     * This mimics RocksDB's lazy iterator behavior where an exhausted
+     * cursor returns null position.
      */
     public static class EloqColumnIterator implements BackendColumnIterator {
 
         private final List<BackendColumn> columns;
+        private final int scanLimit;
         private int index;
 
-        public EloqColumnIterator(List<BackendColumn> columns) {
+        public EloqColumnIterator(List<BackendColumn> columns,
+                                  int scanLimit) {
             this.columns = columns;
+            this.scanLimit = scanLimit;
             this.index = 0;
         }
 
@@ -498,6 +518,13 @@ public class EloqSessions extends BackendSessionPool {
         @Override
         public byte[] position() {
             if (this.index > 0 && this.index <= this.columns.size()) {
+                // If scan returned fewer results than requested limit,
+                // all data has been consumed — signal end-of-data.
+                if (this.scanLimit > 0 &&
+                    this.columns.size() < this.scanLimit &&
+                    this.index == this.columns.size()) {
+                    return null;
+                }
                 return this.columns.get(this.index - 1).name;
             }
             return null;

@@ -297,19 +297,22 @@ public class EloqTable
     /**
      * Compute the limit to pass to native scan.
      * Returns 0 (no limit) if query has no limit.
-     * Otherwise returns limit + 1 to allow detecting more pages.
+     * Otherwise returns offset + limit + 1 to allow offset-skipping
+     * and detecting more pages. RocksDB uses lazy iterators so offset
+     * skipping reads on demand, but EloqRocks eagerly fetches results
+     * so we must pre-fetch enough to cover the offset.
      */
     protected static int queryLimit(Query query) {
         if (query.noLimit()) {
             return 0;
         }
         long limit = query.limit();
-        // Add 1 to detect if there are more results for paging
-        // Cap at Integer.MAX_VALUE to avoid overflow
-        if (limit >= Integer.MAX_VALUE - 1) {
+        long offset = query.offset();
+        long total = offset + limit + 1;
+        if (total >= Integer.MAX_VALUE) {
             return 0; // Effectively no limit
         }
-        return (int) (limit + 1);
+        return (int) total;
     }
 
     // ---- Entry iterator construction ----
