@@ -1,0 +1,18 @@
+# Downloaded datasets
+data/*.txt
+data/*.gz
+
+# Benchmark results and logs
+results/
+logs/
+
+# Benchmark runtime artifacts
+graphdb-benchmarks/storage/
+graphdb-benchmarks/results/
+graphdb-benchmarks/results-*/
+graphdb-benchmarks/metrics/
+graphdb-benchmarks/target/
+graphdb-benchmarks/data
+graphdb-benchmarks/rocksdb-data/
+graphdb-benchmarks/logs/
+graphdb-benchmarks/hs_err_*.log
