@@ -814,11 +814,14 @@ public class RocksDBStdSessions extends RocksDBSessions {
                 return 0;
             }
 
+            long t0 = RocksDBPerfCounters.instance().enterCommit();
             try {
                 rocksdb().write(this.writeOptions, this.batch);
             } catch (RocksDBException e) {
                 //this.batch.rollbackToSavePoint();
                 throw new BackendException(e);
+            } finally {
+                RocksDBPerfCounters.instance().exitCommit(t0, count);
             }
 
             // Clear batch if write() successfully (retained if failed)
@@ -840,10 +843,13 @@ public class RocksDBStdSessions extends RocksDBSessions {
          */
         @Override
         public void put(String table, byte[] key, byte[] value) {
+            long t0 = System.nanoTime();
             try (OpenedRocksDB.CFHandle cf = cf(table)) {
                 this.batch.put(cf.get(), key, value);
             } catch (RocksDBException e) {
                 throw new BackendException(e);
+            } finally {
+                RocksDBPerfCounters.instance().recordPut(System.nanoTime() - t0);
             }
         }
 
@@ -859,6 +865,7 @@ public class RocksDBStdSessions extends RocksDBSessions {
             } catch (RocksDBException e) {
                 throw new BackendException(e);
             }
+            RocksDBPerfCounters.instance().recordMerge();
         }
 
         /**
@@ -866,10 +873,14 @@ public class RocksDBStdSessions extends RocksDBSessions {
          */
         @Override
         public void increase(String table, byte[] key, byte[] value) {
+            long t0 = System.nanoTime();
             try (OpenedRocksDB.CFHandle cf = cf(table)) {
                 rocksdb().merge(cf.get(), key, value);
             } catch (RocksDBException e) {
                 throw new BackendException(e);
+            } finally {
+                RocksDBPerfCounters.instance().recordIncrease(
+                    System.nanoTime() - t0);
             }
         }
 
@@ -878,10 +889,14 @@ public class RocksDBStdSessions extends RocksDBSessions {
          */
         @Override
         public void delete(String table, byte[] key) {
+            long t0 = System.nanoTime();
             try (OpenedRocksDB.CFHandle cf = cf(table)) {
                 this.batch.delete(cf.get(), key);
             } catch (RocksDBException e) {
                 throw new BackendException(e);
+            } finally {
+                RocksDBPerfCounters.instance().recordDelete(
+                    System.nanoTime() - t0);
             }
         }
 
@@ -931,9 +946,13 @@ public class RocksDBStdSessions extends RocksDBSessions {
         public byte[] get(String table, byte[] key) {
             assert !this.hasChanges();
 
+            long t0 = RocksDBPerfCounters.instance().enterGet();
             try (OpenedRocksDB.CFHandle cf = cf(table)) {
-                return rocksdb().get(cf.get(), key);
+                byte[] value = rocksdb().get(cf.get(), key);
+                RocksDBPerfCounters.instance().exitGet(t0, value != null);
+                return value;
             } catch (RocksDBException e) {
+                RocksDBPerfCounters.instance().exitGet(t0, false);
                 throw new BackendException(e);
             }
         }
@@ -945,6 +964,7 @@ public class RocksDBStdSessions extends RocksDBSessions {
         public BackendColumnIterator get(String table, List<byte[]> keys) {
             assert !this.hasChanges();
 
+            long t0 = System.nanoTime();
             try (OpenedRocksDB.CFHandle cf = cf(table)) {
                 // Fill ColumnFamilyHandle list
                 List<ColumnFamilyHandle> cfs = new ArrayList<>(keys.size());
@@ -959,6 +979,8 @@ public class RocksDBStdSessions extends RocksDBSessions {
                  * is not ready, see #9224
                  */
                 List<byte[]> values = rocksdb().multiGetAsList(cfs, keys);
+                RocksDBPerfCounters.instance().recordMget(
+                    System.nanoTime() - t0, keys.size());
                 return new MgetIterator(keys, values);
             } catch (RocksDBException e) {
                 throw new BackendException(e);
@@ -971,8 +993,10 @@ public class RocksDBStdSessions extends RocksDBSessions {
         @Override
         public BackendColumnIterator scan(String table) {
             assert !this.hasChanges();
+            long t0 = RocksDBPerfCounters.instance().enterScan();
             try (OpenedRocksDB.CFHandle cf = cf(table)) {
                 ReusedRocksIterator iter = cf.newIterator();
+                RocksDBPerfCounters.instance().exitScan(t0);
                 return new ScanIterator(table, iter, null, null, SCAN_ANY);
             }
         }
@@ -993,8 +1017,10 @@ public class RocksDBStdSessions extends RocksDBSessions {
              *  options.setAutoPrefixMode(true);
              *  options.setIterateUpperBound(prefix + 1);
              */
+            long t0 = RocksDBPerfCounters.instance().enterScan();
             try (OpenedRocksDB.CFHandle cf = cf(table)) {
                 ReusedRocksIterator iter = cf.newIterator();
+                RocksDBPerfCounters.instance().exitScan(t0);
                 return new ScanIterator(table, iter, prefix, null, SCAN_PREFIX_BEGIN);
             }
         }
@@ -1016,8 +1042,10 @@ public class RocksDBStdSessions extends RocksDBSessions {
              *  options.setAutoPrefixMode(true);
              *  options.setIterateUpperBound(keyTo);
              */
+            long t0 = RocksDBPerfCounters.instance().enterScan();
             try (OpenedRocksDB.CFHandle cf = cf(table)) {
                 ReusedRocksIterator iter = cf.newIterator();
+                RocksDBPerfCounters.instance().exitScan(t0);
                 return new ScanIterator(table, iter, keyFrom, keyTo, scanType);
             }
         }

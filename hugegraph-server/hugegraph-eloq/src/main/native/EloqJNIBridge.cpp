@@ -423,4 +423,80 @@ Java_org_apache_hugegraph_backend_store_eloq_EloqNative_nativeScan(
     return outer;
 }
 
+// ---- Batch Operations ----
+
+/**
+ * Batch write: execute a list of Put/Delete operations atomically.
+ *
+ * Java signature:
+ *   nativeBatchWrite(byte[] opTypes, String[] tables,
+ *                    byte[][] keys, byte[][] values) -> boolean
+ *
+ * opTypes[i]: 0 = Put, 1 = Delete
+ * tables[i]:  table name for operation i
+ * keys[i]:    key bytes for operation i
+ * values[i]:  value bytes for operation i (ignored for Delete)
+ */
+JNIEXPORT jboolean JNICALL
+Java_org_apache_hugegraph_backend_store_eloq_EloqNative_nativeBatchWrite(
+    JNIEnv *env, jclass cls,
+    jbyteArray jOpTypes, jobjectArray jTables,
+    jobjectArray jKeys, jobjectArray jValues)
+{
+    jsize count = env->GetArrayLength(jOpTypes);
+    if (count == 0)
+    {
+        return JNI_TRUE;
+    }
+
+    // Get opTypes as a raw byte array
+    jbyte *opTypes = env->GetByteArrayElements(jOpTypes, nullptr);
+
+    // Build the BatchWriteOp vector
+    std::vector<EloqRocks::BatchWriteOp> ops;
+    ops.reserve(count);
+
+    for (jsize i = 0; i < count; i++)
+    {
+        EloqRocks::BatchWriteOp bop;
+        bop.op = (opTypes[i] == 0) ? EloqRocks::BatchOpType::Put
+                                   : EloqRocks::BatchOpType::Delete;
+
+        // Table name
+        jstring jTable = (jstring)env->GetObjectArrayElement(jTables, i);
+        std::string tableName = JavaToString(env, jTable);
+        env->DeleteLocalRef(jTable);
+
+        auto *th = GetTableHandle(tableName);
+        if (th == nullptr)
+        {
+            std::cerr << "[EloqJNI] BatchWrite: table not found: "
+                      << tableName << std::endl;
+            env->ReleaseByteArrayElements(jOpTypes, opTypes, JNI_ABORT);
+            return JNI_FALSE;
+        }
+        bop.table = th;
+
+        // Key
+        jbyteArray jKey = (jbyteArray)env->GetObjectArrayElement(jKeys, i);
+        bop.key = ByteArrayToString(env, jKey);
+        env->DeleteLocalRef(jKey);
+
+        // Value (only needed for Put)
+        if (bop.op == EloqRocks::BatchOpType::Put)
+        {
+            jbyteArray jVal = (jbyteArray)env->GetObjectArrayElement(jValues, i);
+            bop.value = ByteArrayToString(env, jVal);
+            env->DeleteLocalRef(jVal);
+        }
+
+        ops.push_back(std::move(bop));
+    }
+
+    env->ReleaseByteArrayElements(jOpTypes, opTypes, JNI_ABORT);
+
+    // Execute the batch (handles its own transaction internally)
+    return Service().BatchWrite(ops) ? JNI_TRUE : JNI_FALSE;
+}
+
 }  // extern "C"

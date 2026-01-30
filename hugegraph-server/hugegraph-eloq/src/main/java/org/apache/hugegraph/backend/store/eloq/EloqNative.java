@@ -174,6 +174,23 @@ public final class EloqNative {
                                                boolean endInclusive,
                                                int limit);
 
+    // ---- Batch Operations ----
+
+    /**
+     * Execute a batch of Put/Delete operations atomically.
+     * The C++ side manages its own transaction internally.
+     *
+     * @param opTypes  byte array: 0 = Put, 1 = Delete for each operation
+     * @param tables   table name for each operation
+     * @param keys     key bytes for each operation
+     * @param values   value bytes for each operation (ignored for Delete)
+     * @return true if the batch committed successfully
+     */
+    public static native boolean nativeBatchWrite(byte[] opTypes,
+                                                   String[] tables,
+                                                   byte[][] keys,
+                                                   byte[][] values);
+
     // ---- Java convenience methods ----
 
     public static void init(String configPath) {
@@ -211,7 +228,9 @@ public final class EloqNative {
 
     public static long startTx() {
         checkLoaded();
+        long t0 = System.nanoTime();
         long handle = nativeStartTx();
+        EloqPerfCounters.instance().recordStartTx(System.nanoTime() - t0);
         if (handle == 0L) {
             throw new BackendException("Failed to start EloqRocks transaction");
         }
@@ -220,14 +239,17 @@ public final class EloqNative {
 
     public static void commitTx(long txHandle) {
         checkLoaded();
+        long t0 = System.nanoTime();
         if (!nativeCommitTx(txHandle)) {
             throw new BackendException(
                 "Failed to commit EloqRocks transaction");
         }
+        EloqPerfCounters.instance().recordCommitTx(System.nanoTime() - t0);
     }
 
     public static void abortTx(long txHandle) {
         checkLoaded();
+        EloqPerfCounters.instance().recordAbortTx();
         if (!nativeAbortTx(txHandle)) {
             throw new BackendException(
                 "Failed to abort EloqRocks transaction");
@@ -237,22 +259,35 @@ public final class EloqNative {
     public static void put(long txHandle, String table,
                            byte[] key, byte[] value) {
         checkLoaded();
-        if (!nativePut(txHandle, table, key, value)) {
-            throw new BackendException("EloqRocks put failed on table: " +
-                                       table);
+        long t0 = EloqPerfCounters.instance().enterPut();
+        try {
+            if (!nativePut(txHandle, table, key, value)) {
+                throw new BackendException("EloqRocks put failed on table: " +
+                                           table);
+            }
+        } finally {
+            EloqPerfCounters.instance().exitPut(t0);
         }
     }
 
     public static byte[] get(long txHandle, String table, byte[] key) {
         checkLoaded();
-        return nativeGet(txHandle, table, key);
+        long t0 = EloqPerfCounters.instance().enterGet();
+        byte[] result = nativeGet(txHandle, table, key);
+        EloqPerfCounters.instance().exitGet(t0, result != null);
+        return result;
     }
 
     public static void delete(long txHandle, String table, byte[] key) {
         checkLoaded();
-        if (!nativeDelete(txHandle, table, key)) {
-            throw new BackendException("EloqRocks delete failed on table: " +
-                                       table);
+        long t0 = System.nanoTime();
+        try {
+            if (!nativeDelete(txHandle, table, key)) {
+                throw new BackendException("EloqRocks delete failed on table: " +
+                                           table);
+            }
+        } finally {
+            EloqPerfCounters.instance().recordDelete(System.nanoTime() - t0);
         }
     }
 
@@ -262,8 +297,23 @@ public final class EloqNative {
                                   boolean endInclusive,
                                   int limit) {
         checkLoaded();
-        return nativeScan(txHandle, table, startKey, endKey,
-                          startInclusive, endInclusive, limit);
+        long t0 = EloqPerfCounters.instance().enterScan();
+        byte[][][] result = nativeScan(txHandle, table, startKey, endKey,
+                                       startInclusive, endInclusive, limit);
+        int count = (result != null && result[0] != null) ? result[0].length : 0;
+        EloqPerfCounters.instance().exitScan(t0, count);
+        return result;
+    }
+
+    public static void batchWrite(byte[] opTypes, String[] tables,
+                                    byte[][] keys, byte[][] values) {
+        checkLoaded();
+        long t0 = System.nanoTime();
+        if (!nativeBatchWrite(opTypes, tables, keys, values)) {
+            throw new BackendException("EloqRocks batch write failed");
+        }
+        long elapsed = System.nanoTime() - t0;
+        EloqPerfCounters.instance().recordBatchWrite(elapsed, opTypes.length);
     }
 
     private static void checkLoaded() {

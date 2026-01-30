@@ -70,6 +70,7 @@ public class EloqSessions extends BackendSessionPool {
             try {
                 EloqNative.init("");
                 Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                    EloqPerfCounters.instance().dump();
                     EloqNative.shutdown();
                 }));
                 LOG.info("EloqRocks native service initialized");
@@ -183,11 +184,14 @@ public class EloqSessions extends BackendSessionPool {
             return (expected & actual) == expected;
         }
 
-        // Buffered write operations (replayed on commit)
-        private final List<WriteOp> batch;
+        // Simple put/delete ops (can use nativeBatchWrite)
+        private final List<BatchEntry> batchEntries;
+        // Complex ops that need a transaction handle (deletePrefix, etc.)
+        private final List<WriteOp> complexOps;
 
         public EloqSession() {
-            this.batch = new ArrayList<>();
+            this.batchEntries = new ArrayList<>();
+            this.complexOps = new ArrayList<>();
         }
 
         // ---- Session lifecycle ----
@@ -199,10 +203,12 @@ public class EloqSessions extends BackendSessionPool {
 
         @Override
         public void close() {
-            if (this.batch.size() > 0) {
+            int pending = this.batchEntries.size() + this.complexOps.size();
+            if (pending > 0) {
                 LOG.warn("Closing session with {} uncommitted operations",
-                         this.batch.size());
-                this.batch.clear();
+                         pending);
+                this.batchEntries.clear();
+                this.complexOps.clear();
             }
             this.opened = false;
         }
@@ -211,14 +217,63 @@ public class EloqSessions extends BackendSessionPool {
 
         @Override
         public Object commit() {
-            int count = this.batch.size();
+            int simpleCount = this.batchEntries.size();
+            int complexCount = this.complexOps.size();
+            int count = simpleCount + complexCount;
             if (count == 0) {
                 return 0;
             }
 
+            long t0 = System.nanoTime();
+            try {
+                if (complexCount == 0) {
+                    // Fast path: all ops are simple put/delete → single
+                    // JNI call via nativeBatchWrite (C++ manages its own tx)
+                    commitBatch();
+                } else {
+                    // Slow path: complex ops need a transaction handle
+                    commitWithTx();
+                }
+            } finally {
+                this.batchEntries.clear();
+                this.complexOps.clear();
+                EloqPerfCounters.instance()
+                    .recordSessionCommit(System.nanoTime() - t0, count);
+            }
+            return count;
+        }
+
+        private void commitBatch() {
+            int n = this.batchEntries.size();
+            byte[] opTypes = new byte[n];
+            String[] tables = new String[n];
+            byte[][] keys = new byte[n][];
+            byte[][] values = new byte[n][];
+
+            for (int i = 0; i < n; i++) {
+                BatchEntry e = this.batchEntries.get(i);
+                opTypes[i] = e.op;
+                tables[i] = e.table;
+                keys[i] = e.key;
+                values[i] = e.value;
+            }
+
+            EloqNative.batchWrite(opTypes, tables, keys, values);
+        }
+
+        private void commitWithTx() {
             long tx = EloqNative.startTx();
             try {
-                for (WriteOp op : this.batch) {
+                // Replay simple ops as individual calls
+                for (BatchEntry e : this.batchEntries) {
+                    if (e.op == BatchEntry.OP_PUT) {
+                        EloqNative.put(tx, e.table, e.key, e.value);
+                    } else {
+                        EloqNative.delete(tx, e.table, e.key);
+                    }
+                }
+                // Replay complex ops
+                for (WriteOp op : this.complexOps) {
                     op.execute(tx);
                 }
                 EloqNative.commitTx(tx);
@@ -230,31 +285,31 @@ public class EloqSessions extends BackendSessionPool {
                              abortEx);
                 }
                 throw new BackendException("EloqRocks commit failed", e);
-            } finally {
-                this.batch.clear();
             }
-            return count;
         }
 
         @Override
         public void rollback() {
-            this.batch.clear();
+            this.batchEntries.clear();
+            this.complexOps.clear();
         }
 
         @Override
         public boolean hasChanges() {
-            return !this.batch.isEmpty();
+            return !this.batchEntries.isEmpty() || !this.complexOps.isEmpty();
         }
 
         // ---- Write operations (buffered) ----
 
         public void put(String table, byte[] key, byte[] value) {
-            this.batch.add(tx -> EloqNative.put(tx, table, key, value));
+            this.batchEntries.add(
+                new BatchEntry(BatchEntry.OP_PUT, table, key, value));
         }
 
         public void merge(String table, byte[] key, byte[] value) {
             // No native merge; buffer as put (caller handles semantics)
-            this.batch.add(tx -> EloqNative.put(tx, table, key, value));
+            this.batchEntries.add(
+                new BatchEntry(BatchEntry.OP_PUT, table, key, value));
         }
 
         public void increase(String table, byte[] key, byte[] value) {
@@ -292,7 +347,8 @@ public class EloqSessions extends BackendSessionPool {
         }
 
         public void delete(String table, byte[] key) {
-            this.batch.add(tx -> EloqNative.delete(tx, table, key));
+            this.batchEntries.add(
+                new BatchEntry(BatchEntry.OP_DELETE, table, key, null));
         }
 
         public void deleteSingle(String table, byte[] key) {
@@ -301,7 +357,8 @@ public class EloqSessions extends BackendSessionPool {
 
         public void deletePrefix(String table, byte[] prefix) {
             // Scan with prefix, delete each matching key.
-            this.batch.add(tx -> {
+            // Complex op: needs transaction handle for scan+delete.
+            this.complexOps.add(tx -> {
                 byte[][][] results = EloqNative.scan(
                     tx, table, prefix, null, true, false, 0);
                 if (results != null && results[0] != null) {
@@ -316,7 +373,8 @@ public class EloqSessions extends BackendSessionPool {
 
         public void deleteRange(String table, byte[] keyFrom, byte[] keyTo) {
             // Scan range [keyFrom, keyTo), delete each key.
-            this.batch.add(tx -> {
+            // Complex op: needs transaction handle for scan+delete.
+            this.complexOps.add(tx -> {
                 byte[][][] results = EloqNative.scan(
                     tx, table, keyFrom, keyTo, true, false, 0);
                 if (results != null && results[0] != null) {
@@ -429,6 +487,27 @@ public class EloqSessions extends BackendSessionPool {
     @FunctionalInterface
     private interface WriteOp {
         void execute(long txHandle);
+    }
+
+    /**
+     * Structured entry for simple put/delete operations that can be
+     * submitted as a single nativeBatchWrite JNI call.
+     */
+    private static class BatchEntry {
+        static final byte OP_PUT = 0;
+        static final byte OP_DELETE = 1;
+
+        final byte op;
+        final String table;
+        final byte[] key;
+        final byte[] value; // null for delete
+
+        BatchEntry(byte op, String table, byte[] key, byte[] value) {
+            this.op = op;
+            this.table = table;
+            this.key = key;
+            this.value = value;
+        }
     }
 
     // =====================================================
