@@ -29,10 +29,7 @@ endif
 
 # Compiler settings
 CXX := g++
-CXXFLAGS := -Wall -O2 -fPIC -std=c++17 \
-    -DELOQ_MODULE_ELOQROCKS -DELOQ_MODULE_ENABLED \
-    -DEXT_TX_PROC_ENABLED -DOPEN_LOG_SERVICE=1 \
-    -DWITH_LOG_SERVICE=1
+CXXFLAGS := -Wall -O2 -fPIC -std=c++17
 
 # EloqRocks source and build directories (passed from Maven or set manually)
 ELOQROCKS_SRC ?= ../../../eloqrocks
@@ -40,24 +37,9 @@ ELOQROCKS_BLD ?= ../../../eloqrocks/bld
 
 # Include paths:
 # - JNI headers
-# - EloqRocks public headers
-# - data_substrate headers (tx_service, core, store_handler)
-# Match the exact include paths from CMake (flags.make) + system headers
+# - EloqRocks public header (eloqrocks.h) - all internal types are hidden via PIMPL
 INCLUDES := $(JNIFLAGS) \
-    -I$(ELOQROCKS_SRC)/include \
-    -I$(ELOQROCKS_SRC)/data_substrate \
-    -I$(ELOQROCKS_SRC)/data_substrate/core/include \
-    -I$(ELOQROCKS_SRC)/data_substrate/tx_service/include \
-    -I$(ELOQROCKS_SRC)/data_substrate/tx_service/include/cc \
-    -I$(ELOQROCKS_SRC)/data_substrate/tx_service/include/remote \
-    -I$(ELOQROCKS_SRC)/data_substrate/tx_service/include/fault \
-    -I$(ELOQROCKS_SRC)/data_substrate/tx_service/include/proto \
-    -I$(ELOQROCKS_SRC)/data_substrate/tx_service/tx-log-protos \
-    -I$(ELOQROCKS_SRC)/data_substrate/tx_service/abseil-cpp \
-    -I$(ELOQROCKS_SRC)/data_substrate/store_handler \
-    -I$(ELOQROCKS_SRC)/data_substrate/eloq_metrics/include \
-    -I$(ELOQROCKS_SRC)/data_substrate/log_service/include \
-    -I/usr/local/include/mimalloc-2.1
+    -I$(ELOQROCKS_SRC)/include
 
 # Source files
 SOURCES := EloqJNIBridge.cpp

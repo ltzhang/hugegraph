@@ -17,6 +17,7 @@
 
 #include <jni.h>
 
+#include <atomic>
 #include <cstring>
 #include <iostream>
 #include <memory>
@@ -26,7 +27,6 @@
 #include <vector>
 
 #include "eloqrocks.h"
-#include "rocks_service.h"
 
 // ============================================================================
 // Static state
@@ -41,11 +41,11 @@ static std::mutex g_init_mutex;
 static std::unordered_map<std::string, EloqRocks::TableHandle> g_table_cache;
 static std::mutex g_table_mutex;
 
-// Convenience accessor — returns the RocksService from the open DB.
-static EloqRocks::RocksService &Service()
-{
-    return g_db->Service();
-}
+// Transaction handle storage (id → TxHandle).
+// TxHandle is move-only, so we store in a map and return IDs to Java.
+static std::unordered_map<uint64_t, EloqRocks::TxHandle> g_tx_map;
+static std::mutex g_tx_mutex;
+static std::atomic<uint64_t> g_tx_id_counter{1};  // 0 means "no transaction"
 
 // ============================================================================
 // Helper functions
@@ -97,7 +97,7 @@ static jbyteArray StringToByteArray(JNIEnv *env, const std::string &str)
 
 /**
  * Look up or open a table handle by name.
- * Uses the table cache to avoid repeated OpenTableByName calls.
+ * Uses the table cache to avoid repeated OpenTable calls.
  */
 static EloqRocks::TableHandle *GetTableHandle(const std::string &name)
 {
@@ -108,26 +108,13 @@ static EloqRocks::TableHandle *GetTableHandle(const std::string &name)
         return &it->second;
     }
     // Try to open the table
-    auto handle = Service().OpenTableByName(name);
+    auto handle = g_db->OpenTable(name);
     if (!handle.IsValid())
     {
         return nullptr;
     }
     g_table_cache[name] = std::move(handle);
     return &g_table_cache[name];
-}
-
-/**
- * Convert a transaction handle (jlong) to a TransactionExecution pointer.
- * Returns nullptr for handle == 0 (auto-commit mode).
- */
-static txservice::TransactionExecution *HandleToTx(jlong handle)
-{
-    if (handle == 0L)
-    {
-        return nullptr;
-    }
-    return reinterpret_cast<txservice::TransactionExecution *>(handle);
 }
 
 // ============================================================================
@@ -152,8 +139,6 @@ Java_org_apache_hugegraph_backend_store_eloq_EloqNative_nativeInit(
     std::string configPath = JavaToString(env, jConfigPath);
 
     // Use the EloqRocksDB library API for initialization.
-    // Open() handles: DataSubstrate::Init → EnableEngine → RocksService::Init
-    //                 → DataSubstrate::Start → RocksService::Start
     EloqRocks::EloqRocksConfig cfg;
     cfg.config_file = configPath;
     cfg.log_level = 2;        // ERROR and FATAL only
@@ -186,6 +171,19 @@ Java_org_apache_hugegraph_backend_store_eloq_EloqNative_nativeShutdown(
         return;
     }
 
+    // Clear transaction map (abort any outstanding transactions)
+    {
+        std::lock_guard<std::mutex> txlock(g_tx_mutex);
+        for (auto &kv : g_tx_map)
+        {
+            if (kv.second.IsValid())
+            {
+                g_db->AbortTx(kv.second);
+            }
+        }
+        g_tx_map.clear();
+    }
+
     // Clear table cache
     {
         std::lock_guard<std::mutex> tlock(g_table_mutex);
@@ -205,12 +203,12 @@ Java_org_apache_hugegraph_backend_store_eloq_EloqNative_nativeCreateTable(
     std::string name = JavaToString(env, jName);
 
     // If table already exists, treat as success
-    if (Service().HasTable(name))
+    if (g_db->HasTable(name))
     {
         return JNI_TRUE;
     }
 
-    auto handle = Service().CreateTable(name);
+    auto handle = g_db->CreateTable(name);
     if (!handle.IsValid())
     {
         return JNI_FALSE;
@@ -232,14 +230,14 @@ Java_org_apache_hugegraph_backend_store_eloq_EloqNative_nativeDropTable(
     std::string name = JavaToString(env, jName);
 
     // Get or open the table handle to drop it
-    auto handle = Service().OpenTableByName(name);
+    auto handle = g_db->OpenTable(name);
     if (!handle.IsValid())
     {
         // Table doesn't exist — treat as success
         return JNI_TRUE;
     }
 
-    bool ok = Service().DropTable(handle);
+    bool ok = g_db->DropTable(handle);
 
     // Remove from cache
     {
@@ -255,7 +253,7 @@ Java_org_apache_hugegraph_backend_store_eloq_EloqNative_nativeHasTable(
     JNIEnv *env, jclass cls, jstring jName)
 {
     std::string name = JavaToString(env, jName);
-    return Service().HasTable(name) ? JNI_TRUE : JNI_FALSE;
+    return g_db->HasTable(name) ? JNI_TRUE : JNI_FALSE;
 }
 
 // ---- Transaction Management ----
@@ -264,36 +262,64 @@ JNIEXPORT jlong JNICALL
 Java_org_apache_hugegraph_backend_store_eloq_EloqNative_nativeStartTx(
     JNIEnv *env, jclass cls)
 {
-    auto *txm = Service().StartTx();
-    if (txm == nullptr)
+    auto tx = g_db->StartTx();
+    if (!tx.IsValid())
     {
         return 0L;
     }
-    return reinterpret_cast<jlong>(txm);
+
+    uint64_t txId = g_tx_id_counter.fetch_add(1);
+    {
+        std::lock_guard<std::mutex> lock(g_tx_mutex);
+        g_tx_map[txId] = std::move(tx);
+    }
+    return static_cast<jlong>(txId);
 }
 
 JNIEXPORT jboolean JNICALL
 Java_org_apache_hugegraph_backend_store_eloq_EloqNative_nativeCommitTx(
     JNIEnv *env, jclass cls, jlong txHandle)
 {
-    auto *txm = HandleToTx(txHandle);
-    if (txm == nullptr)
+    uint64_t txId = static_cast<uint64_t>(txHandle);
+    if (txId == 0)
     {
         return JNI_FALSE;
     }
-    return Service().CommitTx(txm) ? JNI_TRUE : JNI_FALSE;
+
+    std::lock_guard<std::mutex> lock(g_tx_mutex);
+    auto it = g_tx_map.find(txId);
+    if (it == g_tx_map.end())
+    {
+        std::cerr << "[EloqJNI] CommitTx: tx not found: " << txId << std::endl;
+        return JNI_FALSE;
+    }
+
+    bool ok = g_db->CommitTx(it->second);
+    g_tx_map.erase(it);  // Remove regardless of commit success
+    return ok ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL
 Java_org_apache_hugegraph_backend_store_eloq_EloqNative_nativeAbortTx(
     JNIEnv *env, jclass cls, jlong txHandle)
 {
-    auto *txm = HandleToTx(txHandle);
-    if (txm == nullptr)
+    uint64_t txId = static_cast<uint64_t>(txHandle);
+    if (txId == 0)
     {
         return JNI_FALSE;
     }
-    return Service().AbortTx(txm) ? JNI_TRUE : JNI_FALSE;
+
+    std::lock_guard<std::mutex> lock(g_tx_mutex);
+    auto it = g_tx_map.find(txId);
+    if (it == g_tx_map.end())
+    {
+        std::cerr << "[EloqJNI] AbortTx: tx not found: " << txId << std::endl;
+        return JNI_FALSE;
+    }
+
+    bool ok = g_db->AbortTx(it->second);
+    g_tx_map.erase(it);  // Remove regardless of abort success
+    return ok ? JNI_TRUE : JNI_FALSE;
 }
 
 // ---- Data Operations ----
@@ -314,9 +340,23 @@ Java_org_apache_hugegraph_backend_store_eloq_EloqNative_nativePut(
 
     std::string key = ByteArrayToString(env, jKey);
     std::string value = ByteArrayToString(env, jValue);
-    auto *txm = HandleToTx(txHandle);
 
-    return Service().Put(*th, key, value, txm) ? JNI_TRUE : JNI_FALSE;
+    uint64_t txId = static_cast<uint64_t>(txHandle);
+    if (txId == 0)
+    {
+        // Auto-commit mode
+        return g_db->Put(*th, key, value) ? JNI_TRUE : JNI_FALSE;
+    }
+
+    // Transactional mode
+    std::lock_guard<std::mutex> lock(g_tx_mutex);
+    auto it = g_tx_map.find(txId);
+    if (it == g_tx_map.end())
+    {
+        std::cerr << "[EloqJNI] Put: tx not found: " << txId << std::endl;
+        return JNI_FALSE;
+    }
+    return g_db->Put(*th, key, value, it->second) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jbyteArray JNICALL
@@ -333,9 +373,29 @@ Java_org_apache_hugegraph_backend_store_eloq_EloqNative_nativeGet(
 
     std::string key = ByteArrayToString(env, jKey);
     std::string value;
-    auto *txm = HandleToTx(txHandle);
 
-    if (!Service().Get(*th, key, value, txm))
+    uint64_t txId = static_cast<uint64_t>(txHandle);
+    bool found = false;
+
+    if (txId == 0)
+    {
+        // Auto-commit mode
+        found = g_db->Get(*th, key, value);
+    }
+    else
+    {
+        // Transactional mode
+        std::lock_guard<std::mutex> lock(g_tx_mutex);
+        auto it = g_tx_map.find(txId);
+        if (it == g_tx_map.end())
+        {
+            std::cerr << "[EloqJNI] Get: tx not found: " << txId << std::endl;
+            return nullptr;
+        }
+        found = g_db->Get(*th, key, value, it->second);
+    }
+
+    if (!found)
     {
         return nullptr;  // Key not found
     }
@@ -358,9 +418,23 @@ Java_org_apache_hugegraph_backend_store_eloq_EloqNative_nativeDelete(
     }
 
     std::string key = ByteArrayToString(env, jKey);
-    auto *txm = HandleToTx(txHandle);
 
-    return Service().Delete(*th, key, txm) ? JNI_TRUE : JNI_FALSE;
+    uint64_t txId = static_cast<uint64_t>(txHandle);
+    if (txId == 0)
+    {
+        // Auto-commit mode
+        return g_db->Delete(*th, key) ? JNI_TRUE : JNI_FALSE;
+    }
+
+    // Transactional mode
+    std::lock_guard<std::mutex> lock(g_tx_mutex);
+    auto it = g_tx_map.find(txId);
+    if (it == g_tx_map.end())
+    {
+        std::cerr << "[EloqJNI] Delete: tx not found: " << txId << std::endl;
+        return JNI_FALSE;
+    }
+    return g_db->Delete(*th, key, it->second) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jobjectArray JNICALL
@@ -385,12 +459,33 @@ Java_org_apache_hugegraph_backend_store_eloq_EloqNative_nativeScan(
                              : "";
 
     std::vector<std::pair<std::string, std::string>> results;
-    auto *txm = HandleToTx(txHandle);
+    uint64_t txId = static_cast<uint64_t>(txHandle);
+    bool ok = false;
 
-    bool ok = Service().Scan(*th, startKey, endKey, results, txm,
-                             startInclusive == JNI_TRUE,
-                             endInclusive == JNI_TRUE,
-                             static_cast<size_t>(limit));
+    if (txId == 0)
+    {
+        // Auto-commit mode
+        ok = g_db->Scan(*th, startKey, endKey, results,
+                        startInclusive == JNI_TRUE,
+                        endInclusive == JNI_TRUE,
+                        static_cast<size_t>(limit));
+    }
+    else
+    {
+        // Transactional mode
+        std::lock_guard<std::mutex> lock(g_tx_mutex);
+        auto it = g_tx_map.find(txId);
+        if (it == g_tx_map.end())
+        {
+            std::cerr << "[EloqJNI] Scan: tx not found: " << txId << std::endl;
+            return nullptr;
+        }
+        ok = g_db->Scan(*th, startKey, endKey, results, it->second,
+                        startInclusive == JNI_TRUE,
+                        endInclusive == JNI_TRUE,
+                        static_cast<size_t>(limit));
+    }
+
     if (!ok)
     {
         return nullptr;
@@ -496,7 +591,7 @@ Java_org_apache_hugegraph_backend_store_eloq_EloqNative_nativeBatchWrite(
     env->ReleaseByteArrayElements(jOpTypes, opTypes, JNI_ABORT);
 
     // Execute the batch (handles its own transaction internally)
-    return Service().BatchWrite(ops) ? JNI_TRUE : JNI_FALSE;
+    return g_db->BatchWrite(ops) ? JNI_TRUE : JNI_FALSE;
 }
 
 }  // extern "C"
